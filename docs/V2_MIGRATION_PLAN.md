@@ -118,11 +118,13 @@ PEM08_V2_SPEC.md
 
 ### F10 — Medium: import-time side effects и неполный shutdown
 
-`backend/services/__init__.py:1–3` eagerly импортирует все сервисы; `openai_service.py:362`, `parser_service.py:216`, `history_service.py:130` создают singleton при импорте. `HistoryService.__init__` может создать файл. `config.py:10,39,68` загружает окружение, настраивает глобальные логи и settings при импорте. Даже health зависит от импортируемого AI/browser стека. Поведение пустого API key в установленном SDK неизвестно: SDK здесь отсутствует.
+`backend/services/__init__.py:1–3` eagerly импортирует все сервисы; `openai_service.py:362`, `parser_service.py:216`, `history_service.py:130` создают singleton при импорте. `HistoryService.__init__` может создать файл. `config.py:10,39,68` загружает окружение, настраивает глобальные логи и settings при импорте. Даже health зависит от импортируемого AI/browser стека.
+
+Последующий smoke test в отдельном Python 3.14.0 virtual environment с установленными baseline dependencies подтвердил дефект (результаты предоставлены пользователем, см. §8): при импорте `backend.services.openai_service` выполняется `openai_service = OpenAIService()`, а `OpenAIService.__init__()` сразу создаёт OpenAI client (`openai_service.py:33–36`). Без API key SDK выбрасывает `openai.OpenAIError: Missing credentials`. Поэтому `backend.main` невозможно импортировать без AI credentials; по той же причине локальный `/health` smoke test без ключа заблокирован. Причина — обязательная import-time инициализация клиента, не Python 3.14 и не отсутствующая зависимость. `/health` не должен зависеть от наличия AI credentials.
 
 `main.py:81,93` использует startup/shutdown events, shutdown закрывает только parser. Пути frontend/history и `.env` относительны CWD (`main.py:110,350`, `config.py:56,64`); запуск из другой директории хрупок. `run.py:34` всегда reload=True — допустимо для development, но режим не настраивается.
 
-План: lifespan, минимальные `__init__`, ресурсы в app state/dependencies, пути относительно project root, закрытие всех созданных ресурсов, тесты repeated startup/shutdown и partial-start failure. Убрать импортную зависимость health от legacy services до удаления самих файлов.
+План: lifespan, минимальные `__init__`, ресурсы в app state/dependencies, пути относительно project root, закрытие всех созданных ресурсов, тесты repeated startup/shutdown и partial-start failure. Убрать обязательное создание AI client при импорте: безопасная lazy initialization или dependency-based initialization только для операций, которым нужен AI. Импорт FastAPI application и `/api/v2/health` должны работать без ключа и без обращения к AI provider; закрепить это автоматическим regression test. Перенос безусловного создания клиента из import в startup сам по себе проблему health без ключа не решает. Исправление здесь не реализуется.
 
 ### F11 — Medium: ошибки скрываются за HTTP 200
 
@@ -146,7 +148,7 @@ Web UI требует переработки из вкладок в workspace; �
 
 ### F14 — Medium: отсутствует воспроизводимая проверка baseline
 
-Тестов, test config и CI нет. Requirements задают только старые нижние границы без зафиксированного проверенного набора. В текущем Python отсутствует значительная часть runtime-зависимостей; импорт приложения реально падает на `pydantic_settings`. Это наблюдение об окружении, не доказательство поломки исходников или несовместимости Python 3.14.
+Тестов, test config и CI нет. Requirements задают только старые нижние границы без зафиксированного проверенного набора. При первоначальном аудите в доступном Python отсутствовала значительная часть runtime-зависимостей, импорт падал на `pydantic_settings`. В последующем отдельном Python 3.14.0 venv все зависимости текущего requirements.txt успешно установились и compileall прошёл; оставшийся import blocker — `Missing credentials` из F10. Подтверждённой несовместимости Python 3.14 сейчас нет; полноценная совместимость требует тестов v2.
 
 ## 3. Reuse matrix
 
@@ -219,7 +221,7 @@ Web UI требует переработки из вкладок в workspace; �
 
 Предложение для SQLAlchemy: сохранить `sqlite:///./data/app.db` из ТЗ, синхронные короткие repository units выполнять вне event loop, не делить Session между потоками и не держать транзакцию во время AI/browser I/O. `aiosqlite` не добавлять автоматически: AsyncEngine потребует отдельного обоснования и изменения URL-конфигурации. Для файлов достаточно bounded sync работы через уже доступный thread offload, без новой зависимости aiofiles.
 
-Установлено в доступном интерпретаторе: FastAPI 0.135.2, Uvicorn 0.42.0, Pydantic 2.12.5, requests 2.32.5. Все остальные строки внешних пакетов этой таблицы отсутствуют, включая httpx, OpenAI, multipart и pytest. Это окружение не является воспроизводимым установленным v1 stack.
+В интерпретаторе первоначального аудита были установлены FastAPI 0.135.2, Uvicorn 0.42.0, Pydantic 2.12.5, requests 2.32.5. Остальные перечисленные внешние пакеты отсутствовали, включая httpx, OpenAI, multipart и pytest. Это исторический снимок того окружения. Позднее в отдельном Python 3.14.0 venv успешно установлены все зависимости текущего корневого `requirements.txt` (см. §8); это не означает установку desktop requirements или новых зависимостей v2. Точные resolved versions этого venv не предоставлены.
 
 Устарели прежде всего нижние границы и интеграционный подход, а не все библиотеки как продукты. FastAPI документирует поддержку Python 3.14 начиная с 0.118.3; исходный минимум 0.104.0 её не обеспечивает ([release notes](https://fastapi.tiangolo.com/release-notes/#01183)). Pillow 12.0.0 официально добавил Python 3.14, поэтому минимум 10.0.0 недостаточен как гарантия ([release notes](https://pillow.readthedocs.io/en/stable/releasenotes/12.0.0.html)). Эти версии — свидетельство необходимости обновить baseline, не окончательные pins. Для остальных зависимостей точные новые версии следует выбрать и проверить в изолированном venv на этапе реализации.
 
@@ -322,7 +324,7 @@ API сохраняет пути и семантику §10: competitors CRUD; te
 
 ## 7. Risks
 
-1. **Python 3.14 compatibility.** Доступен Python 3.14.0; синтаксис и schemas работают, полный стек не проверен. Нижние границы v1 не задают совместимый набор. Нативные wheels для pydantic-core/Pillow/PyMuPDF/greenlet и browser subprocess требуют проверки в выбранном Windows venv. Нельзя считать все пакеты несовместимыми только из-за 3.14. PyMuPDF документирует Windows wheels и тестирование на 3.14 ([installation](https://pymupdf.readthedocs.io/en/latest/installation.html)); это не проверка данного окружения. Консервативная альтернатива — отдельно проверенный Python 3.12/3.13, допускаемый ТЗ, если обнаружится конкретный blocker; интерпретатор сейчас не меняется.
+1. **Python 3.14 compatibility.** В отдельном Python 3.14.0 venv установка всех зависимостей текущего baseline `requirements.txt` и `python -m compileall -q backend desktop run.py` успешны. Подтверждённой несовместимости Python 3.14 сейчас нет. Ошибка импорта `Missing credentials` вызвана инициализацией AI client без ключа, а не версией Python или отсутствием зависимости. Установка и компиляция не доказывают полноценную runtime-совместимость: её всё ещё должны подтвердить тесты v2, включая новые PDF/browser зависимости и Windows lifecycle. Текущие нижние границы не фиксируют проверенный resolved set. PyMuPDF документирует Windows wheels и тестирование на 3.14 ([installation](https://pymupdf.readthedocs.io/en/latest/installation.html)); это не проверка данного окружения. Переход на другой Python не является исправлением F10 и сейчас не обоснован выявленной несовместимостью.
 2. **Windows browser lifecycle.** Проверить subprocess/event loop, reload, остановку и очистку browser contexts на фактических версиях Uvicorn/Playwright. Python package не заменяет установку browser binaries ([Playwright setup](https://playwright.dev/python/docs/library)). Никаких runtime-download драйверов на HTTP request. Sandbox audit-сессии не равен пользовательскому запуску.
 3. **Provider capability.** В v1 URL `https://api.proxyapi.ru/openai/v1`, в ТЗ — `https://api.proxyapi.ru/v1` и другие model IDs. Это осознанная смена настроек, не проверенная совместимость. Доступность заданной модели, vision + json_schema + strict + reasoning_effort и поведение параметров temperature/token limit необходимо подтвердить документацией провайдера и позднее отдельным разрешённым smoke. В этом аудите модели не вызывались, тариф/наличие модели не подтверждались.
 4. **Strict schema не равна истинности.** Pydantic ловит структуру и score, но не доказывает evidence. Нужны source hints, ограничения размера контекста, prompt policy и тесты на отсутствие недоступных выводов. Материал сайта/документа — данные, не инструкции для приложения.
@@ -333,6 +335,10 @@ API сохраняет пути и семантику §10: competitors CRUD; te
 9. **PDF scope.** Локальная отрисовка помогает scanned PDF без отдельного OCR-сервиса, но не гарантирует качественное распознавание любой страницы. Ограничить DPI/пиксели/число страниц и сообщать limitations. Не добавлять Tesseract как обязательную зависимость без требования.
 
 ## 8. Verification baseline
+
+Ниже сохранены результаты первоначального аудита и отдельно добавлены результаты последующего smoke test, предоставленные пользователем. При текущем обновлении документа smoke test не повторялся; установки зависимостей и проверки приложения заново не выполнялись.
+
+### Первоначальный аудит
 
 Команды выполнены из корня проекта. Для Git после первоначального отказа использован только command-scoped override: `git -c safe.directory=C:/Users/admin/CodexWorkspace/pem08-v2 ...`. Git config не изменялся.
 
@@ -368,9 +374,9 @@ compile(Path('desktop/CompetitorMonitor.spec').read_bytes(), 'CompetitorMonitor.
 '@ | python -B -
 ```
 
-`pytest` не запускался: suite и пакет отсутствуют. Не запускались `run.py`, Selenium, desktop GUI/build/clean, AI endpoint и paid API. Не устанавливались зависимости или browser binaries. HTTP health приложения не проверен из-за import blocker. Не выполнялась browser UI проверка, нагрузочное тестирование, SSRF/XSS exploitation или полный dependency vulnerability scan. Успешная компиляция не равна успешному старту.
+В первоначальном аудите `pytest` не запускался: suite и пакет отсутствовали. Не запускались `run.py`, Selenium, desktop GUI/build/clean, AI endpoint и paid API. Не устанавливались зависимости или browser binaries. HTTP health приложения не проверен из-за import blocker. Не выполнялась browser UI проверка, нагрузочное тестирование, SSRF/XSS exploitation или полный dependency vulnerability scan. Успешная компиляция не равна успешному старту.
 
-Финальная проверка после создания документа выполнена:
+Историческая финальная проверка после первоначального создания документа:
 
 - `git -c safe.directory=... diff --check` — exit 0, замечаний нет.
 - `git -c safe.directory=... status --short` — только `?? docs/`.
@@ -379,11 +385,31 @@ compile(Path('desktop/CompetitorMonitor.spec').read_bytes(), 'CompetitorMonitor.
 - Отдельная Python-проверка untracked документа — UTF-8 читается, все 9 разделов присутствуют, code fences парные, trailing whitespace отсутствует, завершающий newline есть. Обычный `git diff --check` сам по себе untracked содержимое не проверяет.
 - `__pycache__` не создан. Commit, staging, удалений и смены ветки не было.
 
+### Последующий smoke test: отдельный Python 3.14 virtual environment
+
+Источник: фактически выполненные проверки и результаты, сообщённые пользователем после установки baseline dependencies. Они относятся к отдельному venv, а не к неполному окружению первоначального аудита.
+
+| Проверка | Фактический результат |
+|---|---|
+| Python | 3.14.0 |
+| Установка всех зависимостей текущего корневого `requirements.txt` | Успешна на Python 3.14 |
+| `python -m compileall -q backend desktop run.py` | Успешно |
+| Git worktree после установки и проверок | Остался чистым |
+| Импорт `backend.main` без API key | Ошибка `openai.OpenAIError: Missing credentials` |
+| Причина ошибки импорта | При импорте `backend.services.openai_service` создаётся глобальный `openai_service = OpenAIService()`; конструктор сразу создаёт OpenAI client, SDK требует credentials |
+| Локальный `/health` smoke test без API key | Заблокирован ошибкой импорта; успешный HTTP-ответ не получен |
+
+Вывод: отсутствие зависимости больше не является причиной этого import failure; подтверждён архитектурный дефект F10. Ошибка не связана с Python 3.14. `/health` должен быть независим от AI credentials. Полная совместимость v2 остаётся предметом автоматических тестов; успешные dependency installation и compileall не подменяют runtime-проверку приложения.
+
 ## 9. Stage 1 proposal
 
 Только предложение; ни один из пунктов ниже в этом аудите не реализован.
 
 **Scope:** config, FastAPI lifespan, `/api/v2/health`, test foundation и необходимые для них запуск/директории/ignore/documentation. Без competitors CRUD, AI analysis, SQLite domain implementation, PDF, Playwright capture и UI redesign.
+
+**Обязательная регрессия F10:** Stage 1 должен позволять импортировать FastAPI application без AI API key. Создание AI client не должно быть обязательным import-time side effect: использовать безопасную lazy initialization либо dependency-based initialization для AI-операций. Startup без ключа также не должен блокировать health. `/api/v2/health` должен возвращать ответ без обращения к AI provider, с `ai_configured:false` при отсутствии credentials.
+
+Добавить автоматический тест в изолированном окружении без ключей и загрузки реальной `.env`: свежий import `backend.main` (без использования уже закешированного модуля), вход в lifespan и GET `/api/v2/health` завершаются успешно, HTTP status — 200, `ai_configured` — false. Spy/fake конструктора клиента и запрет внешнего I/O должны подтверждать, что на этом пути AI client не создаётся и provider не вызывается. Не подменять само FastAPI application или health handler: тест должен ловить реальную регрессию import-time initialization.
 
 1. **Config.** Settings v2 с `APP_*`, `AI_*`, `DATABASE_URL`, upload/screenshot paths, лимитами и browser settings из §6. Пути разрешать относительно project root. Секрет хранить как secret value и не логировать. `AI_API_KEY` может отсутствовать для health/tests; `ai_configured` означает наличие настроек, не проверку работоспособности AI. Явно разобрать CSV `CORS_ORIGINS` из примера; не рассчитывать, что обычное list-поле Settings автоматически примет comma-separated значение. Добавить настраиваемый AI timeout, требуемый §17, с документированными единицами и default. `.env.example`, `.gitignore`, loopback default. Определить временное чтение старых PROXY_API_KEY/OPENAI_MODEL только для сохраняемых legacy routes, чтобы не смешивать v1/v2 base URL и model IDs.
 2. **Lifespan.** Создать `backend/lifespan.py`; перенести startup/shutdown ответственность из decorators. Создание безопасных data dirs при startup, injectable resource factories/app state и гарантированный cleanup даже при частичном сбое. Не открывать сеть при import. На этом этапе не поднимать настоящий browser и не создавать schema competitors. Убрать eager legacy imports из health path; если v1 routes сохраняются, их ресурсы создавать лениво и закрывать явно. Проверять shutdown executor/client, а не только замену синтаксиса декоратора.
