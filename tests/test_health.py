@@ -58,7 +58,7 @@ def test_health_and_legacy_routes_offline(app):
             assert response.status_code == 200
             assert response.json() == {
                 "status": "ok", "version": "2.0.0",
-                "database": "not_initialized", "browser": "not_initialized",
+                "database": "ready", "browser": "not_initialized",
                 "ai_configured": False,
             }
             for path in ("/", "/static/app.js", "/health", "/openapi.json", "/history"):

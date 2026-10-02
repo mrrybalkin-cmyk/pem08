@@ -14,6 +14,7 @@ import uvicorn
 from backend.config import PROJECT_ROOT, settings
 from backend.lifespan import lifespan
 from backend.api.health import router as health_router
+from backend.api.competitors import router as competitors_router
 from backend.models.schemas import (
     TextAnalysisRequest,
     TextAnalysisResponse,
@@ -74,6 +75,7 @@ async def log_requests(request: Request, call_next):
 
 
 app.include_router(health_router)
+app.include_router(competitors_router)
 
 
 # === Эндпоинты ===
