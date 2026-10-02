@@ -130,3 +130,32 @@ def app():
     from backend.main import app
 
     return app
+
+
+@pytest.fixture
+def analysis_payload():
+    """A complete v2 provider payload; empty arrays/nulls remain explicit."""
+    return {
+        "executive_summary": "Контекст описывает предложение автоматизации для команд.",
+        "positioning": "Автоматизация для небольших команд",
+        "target_audience": ["Команды"],
+        "value_propositions": ["Автоматизация"],
+        "differentiators": [],
+        "strengths": ["Ясное предложение"],
+        "gaps": ["Нет подтверждения результатов"],
+        "marketing_messages": ["Экономия времени"],
+        "scorecard": {
+            **{name: {"score": 5, "rationale": "Оценка основана на предоставленном тексте"}
+               for name in ("positioning_clarity", "value_proposition", "trust", "cta_strength")},
+            "visual_consistency": None,
+            "ux_clarity": None,
+        },
+        "evidence": [{
+            "category": "positioning", "finding": "Заявлена автоматизация",
+            "evidence": "Автоматизация для команд", "source_hint": "Описание",
+            "confidence": "high",
+        }],
+        "opportunities": ["Добавить подтверждение результатов"],
+        "recommended_actions": ["Опубликовать кейс"],
+        "limitations": ["Доступен только предоставленный текст"],
+    }

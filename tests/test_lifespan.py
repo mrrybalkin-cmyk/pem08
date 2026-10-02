@@ -12,6 +12,8 @@ def test_repeated_lifecycle_does_not_create_clients(app, monkeypatch):
     history_existed = settings.history_file.exists()
     history_before = settings.history_file.read_bytes() if history_existed else None
     monkeypatch.setattr("backend.services.openai_service.OpenAI", constructor)
+    monkeypatch.setattr("backend.services.ai_service.AsyncOpenAI", constructor)
+    from backend.services.ai_service import ai_service
     for _ in range(2):
         with TestClient(app):
             assert app.state.started
@@ -19,6 +21,7 @@ def test_repeated_lifecycle_does_not_create_clients(app, monkeypatch):
             assert settings.screenshot_dir.is_dir()
             assert openai_service._client is None
             assert parser_service._executor is None
+            assert ai_service._client is None
         assert not app.state.started
     constructor.assert_not_called()
     assert settings.history_file.exists() is history_existed
@@ -86,3 +89,47 @@ def test_lifespan_initializes_competitor_table(app):
         assert "competitors" in tables
 
     assert app.state.database_ready is False
+
+
+def test_v2_client_closed_on_repeated_lifecycle(app, monkeypatch):
+    from unittest.mock import AsyncMock
+    from backend.services.ai_service import ai_service
+    for _ in range(2):
+        client = Mock(close=AsyncMock())
+        with TestClient(app):
+            monkeypatch.setattr(ai_service, "_client", client)
+        client.close.assert_awaited_once()
+        assert ai_service._client is None
+
+
+def test_v2_cleanup_and_database_disposal_on_legacy_cleanup_failure(app, monkeypatch):
+    from unittest.mock import AsyncMock
+    from backend.services.ai_service import ai_service
+    from backend.services.openai_service import openai_service
+    from backend.database import engine
+    client = Mock(close=AsyncMock())
+    monkeypatch.setattr(ai_service, "_client", client)
+    monkeypatch.setattr(openai_service, "close", Mock(side_effect=RuntimeError("legacy cleanup failure")))
+    dispose = Mock(wraps=engine.dispose)
+    monkeypatch.setattr(engine, "dispose", dispose)
+    with pytest.raises(RuntimeError, match="legacy cleanup failure"):
+        with TestClient(app):
+            pass
+    client.close.assert_awaited_once()
+    assert ai_service._client is None
+    dispose.assert_called_once()
+
+
+def test_database_disposed_even_if_v2_cleanup_fails(app, monkeypatch):
+    from unittest.mock import AsyncMock
+    from backend.services.ai_service import ai_service
+    from backend.database import engine
+    client = Mock(close=AsyncMock(side_effect=RuntimeError("v2 cleanup failure")))
+    monkeypatch.setattr(ai_service, "_client", client)
+    dispose = Mock(wraps=engine.dispose)
+    monkeypatch.setattr(engine, "dispose", dispose)
+    with pytest.raises(RuntimeError, match="v2 cleanup failure"):
+        with TestClient(app):
+            pass
+    assert ai_service._client is None
+    dispose.assert_called_once()

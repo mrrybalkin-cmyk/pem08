@@ -11,6 +11,7 @@ from backend.database import Base, engine
 from backend.models import db as db_models  # noqa: F401
 from backend.services.openai_service import openai_service
 from backend.services.parser_service import parser_service
+from backend.services.ai_service import ai_service
 
 logger = logging.getLogger("competitor_monitor")
 
@@ -51,8 +52,11 @@ async def lifespan(app: FastAPI):
                     openai_service.close
                 )
             finally:
-                await asyncio.to_thread(
-                    engine.dispose
-                )
+                try:
+                    await ai_service.close()
+                finally:
+                    await asyncio.to_thread(
+                        engine.dispose
+                    )
 
         logger.info("Application stopped")
