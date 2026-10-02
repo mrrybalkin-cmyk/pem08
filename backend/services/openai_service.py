@@ -18,28 +18,39 @@ from backend.models.schemas import CompetitorAnalysis, ImageAnalysis
 logger = logging.getLogger("competitor_monitor.openai")
 
 
+class AIConfigurationError(RuntimeError):
+    """AI credentials are missing; no provider request was attempted."""
+
+
 class OpenAIService:
     """Сервис для анализа через ProxyAPI"""
     
     def __init__(self):
-        logger.info("=" * 50)
-        logger.info("Инициализация OpenAI сервиса")
-        logger.info(f"  Base URL: {settings.proxy_api_base_url}")
-        logger.info(f"  Модель текста: {settings.openai_model}")
-        logger.info(f"  Модель vision: {settings.openai_vision_model}")
-        logger.info(f"  API ключ: {'*' * 10}...{settings.proxy_api_key[-4:] if settings.proxy_api_key else 'НЕ ЗАДАН'}")
-        
-        # ProxyAPI - OpenAI-совместимый API для России
-        self.client = OpenAI(
-            api_key=settings.proxy_api_key,
-            base_url=settings.proxy_api_base_url
-        )
+        self._client = None
         self.model = settings.openai_model
         self.vision_model = settings.openai_vision_model
-        
-        logger.info("OpenAI сервис инициализирован успешно ✓")
-        logger.info("=" * 50)
-    
+
+    @property
+    def client(self):
+        """Create the legacy client only when an AI operation needs it."""
+        if self._client is None:
+            key = settings.proxy_api_key.get_secret_value().strip()
+            if not key:
+                raise AIConfigurationError(
+                    "AI не настроен: задайте PROXY_API_KEY для legacy v1 endpoints."
+                )
+            self._client = OpenAI(
+                api_key=key,
+                base_url=settings.proxy_api_base_url,
+                timeout=settings.ai_timeout_seconds,
+            )
+        return self._client
+
+    def close(self):
+        if self._client is not None:
+            client, self._client = self._client, None
+            client.close()
+
     def _parse_json_response(self, content: str) -> dict:
         """Извлечь JSON из ответа модели"""
         logger.debug(f"Парсинг JSON ответа, длина: {len(content)} символов")

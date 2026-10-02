@@ -11,7 +11,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import uvicorn
 
-from backend.config import settings
+from backend.config import PROJECT_ROOT, settings
+from backend.lifespan import lifespan
+from backend.api.health import router as health_router
 from backend.models.schemas import (
     TextAnalysisRequest,
     TextAnalysisResponse,
@@ -28,15 +30,11 @@ from backend.services.history_service import history_service
 # Логгер для API
 logger = logging.getLogger("competitor_monitor.api")
 
-# Инициализация приложения
-logger.info("=" * 60)
-logger.info("🚀 ЗАПУСК ПРИЛОЖЕНИЯ: Мониторинг конкурентов")
-logger.info("=" * 60)
-
 app = FastAPI(
     title="Мониторинг конкурентов",
     description="MVP ассистент для анализа конкурентов с поддержкой текста и изображений",
-    version="1.0.0",
+    version="2.0.0",
+    lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc"
 )
@@ -44,13 +42,13 @@ app = FastAPI(
 # CORS для работы с фронтендом
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=settings.allowed_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-logger.info("CORS middleware добавлен ✓")
+logger.info("CORS middleware configured")
 
 
 # === Middleware для логирования запросов ===
@@ -61,7 +59,7 @@ async def log_requests(request: Request, call_next):
     start_time = time.time()
     
     # Логируем входящий запрос
-    logger.info(f"➡️  {request.method} {request.url.path}")
+    logger.info(f"Request: {request.method} {request.url.path}")
     if request.query_params:
         logger.debug(f"    Query params: {dict(request.query_params)}")
     
@@ -70,35 +68,12 @@ async def log_requests(request: Request, call_next):
     
     # Логируем ответ
     elapsed = time.time() - start_time
-    status_emoji = "✅" if response.status_code < 400 else "❌"
-    logger.info(f"{status_emoji} {request.method} {request.url.path} -> {response.status_code} ({elapsed:.3f}s)")
+    logger.info(f"Response: {request.method} {request.url.path} -> {response.status_code} ({elapsed:.3f}s)")
     
     return response
 
 
-# === События жизненного цикла ===
-
-@app.on_event("startup")
-async def startup_event():
-    """Событие при запуске сервера"""
-    logger.info("=" * 60)
-    logger.info("🟢 СЕРВЕР ЗАПУЩЕН")
-    logger.info(f"  Адрес: http://{settings.api_host}:{settings.api_port}")
-    logger.info(f"  Документация: http://localhost:{settings.api_port}/docs")
-    logger.info(f"  Модель текста: {settings.openai_model}")
-    logger.info(f"  Модель vision: {settings.openai_vision_model}")
-    logger.info("=" * 60)
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Закрытие ресурсов при остановке сервера"""
-    logger.info("=" * 60)
-    logger.info("🔴 ОСТАНОВКА СЕРВЕРА")
-    logger.info("  Закрытие Parser сервиса...")
-    await parser_service.close()
-    logger.info("  ✓ Все ресурсы освобождены")
-    logger.info("=" * 60)
+app.include_router(health_router)
 
 
 # === Эндпоинты ===
@@ -107,7 +82,7 @@ async def shutdown_event():
 async def root():
     """Главная страница - отдаём фронтенд"""
     logger.debug("Запрос главной страницы")
-    return FileResponse("frontend/index.html")
+    return FileResponse(PROJECT_ROOT / "frontend/index.html")
 
 
 @app.post("/analyze_text", response_model=TextAnalysisResponse)
@@ -347,7 +322,7 @@ async def health_check():
 
 
 # Статические файлы для фронтенда
-app.mount("/static", StaticFiles(directory="frontend"), name="static")
+app.mount("/static", StaticFiles(directory=PROJECT_ROOT / "frontend"), name="static")
 logger.info("Статические файлы подключены: /static -> frontend/")
 
 

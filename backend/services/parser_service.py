@@ -33,9 +33,9 @@ class ParserService:
         logger.info(f"  User-Agent: {settings.parser_user_agent[:50]}...")
         
         self.timeout = settings.parser_timeout
-        self._executor = ThreadPoolExecutor(max_workers=2)
+        self._executor = None
         
-        logger.info("Parser сервис инициализирован ✓")
+        logger.info("Parser service initialized (executor is lazy)")
         logger.info("=" * 50)
     
     def _create_driver(self) -> webdriver.Chrome:
@@ -190,6 +190,8 @@ class ParserService:
         
         # Запускаем синхронный парсинг в отдельном потоке
         loop = asyncio.get_event_loop()
+        if self._executor is None:
+            self._executor = ThreadPoolExecutor(max_workers=2)
         result = await loop.run_in_executor(
             self._executor,
             self._parse_sync,
@@ -207,8 +209,10 @@ class ParserService:
     async def close(self):
         """Закрыть executor"""
         logger.info("Закрытие Parser сервиса...")
-        self._executor.shutdown(wait=False)
-        logger.info("Parser сервис закрыт ✓")
+        if self._executor is not None:
+            executor, self._executor = self._executor, None
+            await asyncio.to_thread(executor.shutdown, wait=True)
+        logger.info("Parser service closed")
 
 
 # Глобальный экземпляр

@@ -28,14 +28,6 @@ class HistoryService:
         logger.info(f"  Файл истории: {self.history_file}")
         logger.info(f"  Макс. записей: {self.max_items}")
         
-        self._ensure_file_exists()
-        
-        # Загружаем и показываем текущее состояние
-        history = self._load_history()
-        logger.info(f"  Текущих записей: {len(history)}")
-        logger.info("History сервис инициализирован ✓")
-        logger.info("=" * 50)
-    
     def _ensure_file_exists(self):
         """Создать файл истории если его нет"""
         if not self.history_file.exists():

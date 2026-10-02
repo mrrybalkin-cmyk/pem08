@@ -1,5 +1,65 @@
 # 🔍 Мониторинг конкурентов - AI Ассистент
 
+## v2 — Stage 1 Foundation
+
+Stage 1 добавляет конфигурацию, lifespan и `GET /api/v2/health`.
+SQLite, Playwright, PDF, CRUD и AI pipeline v2 пока не реализованы.
+Существующий UI и v1 API сохранены; описание ниже относится к v1.
+
+Команды Windows/PowerShell выполняются из корня проекта с активированным
+virtual environment Python 3.14 (либо используйте собственный путь к его Python):
+
+```powershell
+python run.py
+```
+
+Ключ для запуска и health не нужен. Шаблон конфигурации — `.env.example`;
+локальный `.env` игнорируется Git. Относительные пути upload/screenshot/history
+разрешаются от корня проекта. По умолчанию сервер слушает `127.0.0.1:8000`,
+CORS разрешает только origins из `CORS_ORIGINS` (CSV).
+
+Health возвращает HTTP 200:
+
+```json
+{"status":"ok","version":"2.0.0","database":"not_initialized","browser":"not_initialized","ai_configured":false}
+```
+
+`ai_configured` отражает только наличие непустого `AI_API_KEY` для v2,
+а не доступность провайдера. `AI_*` подготовлены по ТЗ для будущего pipeline.
+Сохранённые v1 AI endpoints используют отдельные `PROXY_API_KEY`,
+`PROXY_API_BASE_URL`, `OPENAI_MODEL`, `OPENAI_VISION_MODEL`; v2 URL/model IDs
+не подставляются в legacy запросы. Без legacy ключа возвращается явная ошибка
+в существующем v1 формате `success:false`. `AI_TIMEOUT_SECONDS` (default 60 секунд)
+применяется к legacy клиенту. `API_HOST/API_PORT` поддерживаются как старые aliases,
+приоритет имеют `APP_HOST/APP_PORT`.
+
+Lifespan создаёт каталоги uploads/screenshots без сетевых запросов. AI client и
+Selenium executor создаются лениво, закрываются при shutdown и могут создаваться
+снова при следующем запуске. История не читается и не создаётся при импорте.
+
+Offline-проверки:
+
+```powershell
+python -m compileall -q backend desktop run.py
+python -m pytest -q
+python -c "import backend.main; print('IMPORT_OK')"
+```
+
+Тесты изолируют environment и `.env`, используют временные каталоги,
+блокируют сетевой I/O (кроме внутреннего Windows socketpair для asyncio),
+подменяют AI SDK и не запускают браузер. Для установки тестовых зависимостей:
+
+```powershell
+python -m pip install -r requirements-dev.txt
+```
+
+`requirements.txt` содержит только runtime dependencies;
+новое окружение внутри репозитория не требуется.
+
+Промежуточный контракт Stage 1 уточняет пример полного v2 из §10/§18 ТЗ:
+database/browser честно `not_initialized`, AI client не создаётся на startup.
+Это соответствует ограничению Stage 1; архитектурные документы не переписаны.
+
 MVP приложение для анализа конкурентной среды с поддержкой мультимодальности (текст и изображения).
 
 ![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)
@@ -37,10 +97,10 @@ pip install -r requirements.txt
 
 ### 2. Настройка переменных окружения
 
-Создайте файл `.env` в корне проекта (используйте `env.example.txt` как шаблон):
+Создайте файл `.env` в корне проекта (используйте `.env.example` как шаблон):
 
 ```env
-OPENAI_API_KEY=your_openai_api_key_here
+PROXY_API_KEY=your_proxy_api_key_here
 OPENAI_MODEL=gpt-4o-mini
 OPENAI_VISION_MODEL=gpt-4o-mini
 ```
@@ -74,8 +134,9 @@ competitor-monitor/
 │   ├── index.html           # HTML страница
 │   ├── styles.css           # Стили
 │   └── app.js               # JavaScript логика
-├── requirements.txt         # Зависимости Python
-├── env.example.txt          # Пример .env файла
+├── requirements.txt         # Runtime dependencies
+├── requirements-dev.txt     # Runtime и test dependencies
+├── .env.example             # Пример .env файла
 ├── history.json             # Файл истории (создаётся автоматически)
 ├── README.md                # Этот файл
 └── docs.md                  # Документация API

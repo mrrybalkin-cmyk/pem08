@@ -20,3 +20,11 @@ build/
 # OS junk
 .DS_Store
 Thumbs.db
+
+# Local secrets and runtime artifacts
+.env
+.env.*
+!.env.example
+.pytest_cache/
+data/*
+!data/.gitkeep
