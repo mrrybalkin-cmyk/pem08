@@ -61,7 +61,7 @@ class CompetitorAnalysis(AnalysisModel):
 
 
 class PreparedAnalysisInput(AnalysisModel):
-    """Prepared context boundary (§12); image inputs are reserved, not processed yet."""
+    """Prepared context boundary (§12); images use validated data URLs."""
 
     competitor_name: str
     source_type: SourceType

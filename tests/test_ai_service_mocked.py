@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from pydantic import SecretStr
 
-from backend.models.analysis import CompetitorAnalysis, PreparedAnalysisInput
+from backend.models.analysis import CompetitorAnalysis, PreparedAnalysisInput, SourceType
 from backend.services.ai_service import (
     AIConfigurationError as V2ConfigurationError, AIProviderError,
     AIProviderTimeoutError, AIResponseError, AIService,
@@ -170,11 +170,67 @@ async def test_v2_request_does_not_block_event_loop(v2_boundary, prepared_input)
 
 
 @pytest.mark.asyncio
-async def test_v2_multimodal_is_not_implemented(v2_boundary, prepared_input):
+async def test_v2_text_cannot_contain_images(v2_boundary, prepared_input):
     prepared_input.image_inputs = ["data:image/png;base64,test-only"]
-    with pytest.raises(ValueError, match="text input only"):
+    with pytest.raises(ValueError, match="text input cannot contain images"):
         await AIService().analyze_source(prepared_input)
     v2_boundary[1].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_v2_image_multimodal_structured_result(v2_boundary, prepared_input, analysis_payload):
+    import base64
+    from io import BytesIO
+    from PIL import Image
+    image = BytesIO()
+    Image.new("RGB", (3, 3)).save(image, format="PNG")
+    data_url = "data:image/png;base64," + base64.b64encode(image.getvalue()).decode("ascii")
+    prepared_input.source_type = SourceType.image
+    prepared_input.image_inputs = [data_url]
+    for field in ("visual_consistency", "ux_clarity"):
+        analysis_payload["scorecard"][field] = {"score": 7, "rationale": "Видимые элементы согласованы"}
+    client, _ = v2_boundary
+    client.chat.completions.parse.return_value = completion(CompetitorAnalysis.model_validate(analysis_payload))
+    service = AIService()
+    result = await service.analyze_source(prepared_input)
+    assert result.model_dump(mode="json") == analysis_payload
+    parts = client.chat.completions.parse.await_args.kwargs["messages"][1]["content"]
+    assert parts[0]["type"] == "text"
+    assert json.loads(parts[0]["text"])["source_type"] == "image"
+    assert data_url not in parts[0]["text"]
+    assert parts[1] == {"type": "image_url", "image_url": {"url": data_url}}
+    assert client.chat.completions.parse.await_args.kwargs["response_format"] is CompetitorAnalysis
+    await service.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["no_image", "remote", "bad_base64", "pdf", "url"])
+async def test_v2_rejects_unsupported_image_inputs(v2_boundary, prepared_input, kind):
+    prepared_input.source_type = SourceType.image
+    prepared_input.image_inputs = [] if kind == "no_image" else ["https://example.invalid/a.png" if kind == "remote" else "data:image/png;base64,!!!"]
+    if kind in {"pdf", "url"}:
+        prepared_input.source_type = SourceType(kind)
+    with pytest.raises(ValueError):
+        await AIService().analyze_source(prepared_input)
+    v2_boundary[1].assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["timeout", "invalid"])
+async def test_v2_image_errors_remain_controlled(v2_boundary, prepared_input, failure):
+    from openai import APITimeoutError
+    import httpx2
+    prepared_input.source_type = SourceType.image
+    prepared_input.image_inputs = ["data:image/png;base64,dGVzdA=="]
+    client, _ = v2_boundary
+    if failure == "timeout":
+        client.chat.completions.parse.side_effect = APITimeoutError(request=httpx2.Request("POST", "https://test.invalid"))
+    else:
+        client.chat.completions.parse.return_value = completion(None)
+    service = AIService()
+    with pytest.raises(AIProviderTimeoutError if failure == "timeout" else AIResponseError):
+        await service.analyze_source(prepared_input)
+    await service.close()
 
 
 @pytest.mark.asyncio

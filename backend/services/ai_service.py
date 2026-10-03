@@ -1,4 +1,6 @@
-"""Lazy async v2 text analysis; no legacy parser or persistence dependencies."""
+"""Lazy async v2 text/image analysis; no legacy parser or persistence dependencies."""
+
+import base64
 
 from openai import (
     APIError, APITimeoutError, AsyncOpenAI,
@@ -59,8 +61,19 @@ class AIService:
         return self._client
 
     async def analyze_source(self, prepared_input: PreparedAnalysisInput) -> CompetitorAnalysis:
-        if prepared_input.source_type != SourceType.text or prepared_input.image_inputs:
-            raise ValueError("Stage 3 supports prepared text input only")
+        if prepared_input.source_type not in {SourceType.text, SourceType.image}:
+            raise ValueError("Only prepared text/image input is supported")
+        if prepared_input.source_type == SourceType.text and prepared_input.image_inputs:
+            raise ValueError("Prepared text input cannot contain images")
+        if prepared_input.source_type == SourceType.image:
+            if not prepared_input.image_inputs:
+                raise ValueError("Prepared image input requires an image")
+            for url in prepared_input.image_inputs:
+                header, separator, encoded = url.partition(",")
+                if not separator or header not in {
+                    "data:image/jpeg;base64", "data:image/png;base64", "data:image/webp;base64",
+                } or not base64.b64decode(encoded, validate=True):
+                    raise ValueError("Prepared images must be supported base64 data URLs")
         options = {}
         if settings.ai_reasoning_effort.strip():
             options["reasoning_effort"] = settings.ai_reasoning_effort.strip()

@@ -15,13 +15,22 @@ source_hint должен указывать на source_label или origin_meta
 Scorecard: positioning_clarity, value_proposition, trust, cta_strength,
 visual_consistency, ux_clarity. Каждый доступный score — целое число 0–10 с rationale.
 Для текста без визуальных данных visual_consistency и ux_clarity должны быть null;
+Для изображений оценивай visual_consistency и ux_clarity только по видимым элементам;
+если измерение недоступно, используй null и объясни ограничение в limitations.
 не выдумывай визуальную оценку. Обосновывай остальные оценки материалом источника
 и указывай недостаток данных. Возможности и recommended_actions выводи из наблюдений.
 """
 
 
-def build_analysis_messages(prepared_input: PreparedAnalysisInput) -> list[dict[str, str]]:
+def build_analysis_messages(prepared_input: PreparedAnalysisInput) -> list[dict]:
+    if prepared_input.image_inputs:
+        # Image bytes are separate multimodal parts, never duplicated in JSON text.
+        context = prepared_input.model_dump_json(exclude={"image_inputs"})
+        content = [{"type": "text", "text": context}]
+        content.extend({"type": "image_url", "image_url": {"url": url}} for url in prepared_input.image_inputs)
+    else:
+        content = prepared_input.model_dump_json()
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": prepared_input.model_dump_json()},
+        {"role": "user", "content": content},
     ]

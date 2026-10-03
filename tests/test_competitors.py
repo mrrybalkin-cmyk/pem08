@@ -60,7 +60,7 @@ def test_create_list_get_and_delete(competitor_client):
     item_url = f"{URL}/{first['id']}"
     loaded = client.get(item_url)
     assert loaded.status_code == 200
-    assert loaded.json() == first
+    assert loaded.json() == {**first, "sources": [], "latest_analysis": None}
     deleted = client.delete(item_url)
     assert deleted.status_code == 204
     assert deleted.content == b""
@@ -88,7 +88,7 @@ def test_patch_preserves_omitted_fields_and_clears_nulls(competitor_client):
     assert updated["website_url"] == created["website_url"]
     assert updated["created_at"] == created["created_at"]
     assert datetime.fromisoformat(updated["updated_at"]) >= datetime.fromisoformat(created["updated_at"])
-    assert client.get(item_url).json() == updated
+    assert client.get(item_url).json() == {**updated, "sources": [], "latest_analysis": None}
     cleared = client.patch(item_url, json={"notes": None})
     assert cleared.status_code == 200
     assert client.get(item_url).json()["notes"] is None
@@ -125,7 +125,7 @@ def test_patch_validation(competitor_client, payload):
     created = competitor_client.post(URL, json={"name": "Alpha"}).json()
     item_url = f"{URL}/{created['id']}"
     assert competitor_client.patch(item_url, json=payload).status_code == 422
-    assert competitor_client.get(item_url).json() == created
+    assert competitor_client.get(item_url).json() == {**created, "sources": [], "latest_analysis": None}
 
 
 @pytest.mark.parametrize("method,operation", [
@@ -166,7 +166,7 @@ def test_write_failure_rolls_back(competitor_client, monkeypatch, method, operat
             else:
                 client.request(method, URL if method == "post" else item_url, json={"name": "Changed"})
         rollback_calls.assert_called_once_with()
-    assert client.get(item_url).json() == created
+    assert client.get(item_url).json() == {**created, "sources": [], "latest_analysis": None}
     assert len(client.get(URL).json()) == 1
 
 
