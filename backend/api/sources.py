@@ -15,6 +15,7 @@ from backend.services.storage_service import ImageTooLarge, InvalidImage
 from backend.services.document_service import InvalidPDF, PDFTooLarge
 from backend.security.url_validation import InvalidURL
 from backend.services.browser_service import BrowserCaptureError, BrowserTimeoutError
+from backend.services.analysis_service import AnalysisDataNotReady
 
 
 class SourceRoute(APIRoute):
@@ -24,6 +25,8 @@ class SourceRoute(APIRoute):
         async def safe_handler(request):
             try:
                 return await handler(request)
+            except AnalysisDataNotReady:
+                status, code, message = 400, "ANALYSIS_DATA_NOT_READY", "No usable analyses available for this operation"
             except InvalidURL as exc:
                 status, code, message = 400, exc.code, str(exc)
             except BrowserTimeoutError:

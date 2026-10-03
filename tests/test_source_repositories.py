@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from backend.database import Base
 from backend.models.analysis import CompetitorAnalysis
-from backend.models.db import Analysis, Source, SourceSnapshot
+from backend.models.db import Analysis, Comparison, Source, SourceSnapshot
 from backend.repositories import analyses, competitors, sources
 
 
@@ -22,7 +22,7 @@ def source_engine(tmp_path):
 
 
 def test_stage4_table_contract(source_engine):
-    assert set(inspect(source_engine).get_table_names()) == {"competitors", "sources", "source_snapshots", "analyses"}
+    assert set(inspect(source_engine).get_table_names()) == {"competitors", "sources", "source_snapshots", "analyses", "comparisons"}
     assert set(Source.__table__.columns.keys()) == {
         "id", "competitor_id", "source_type", "label", "original_filename", "mime_type", "url", "storage_path", "sha256", "created_at",
     }
@@ -31,6 +31,9 @@ def test_stage4_table_contract(source_engine):
     }
     assert set(Analysis.__table__.columns.keys()) == {
         "id", "competitor_id", "snapshot_id", "analysis_type", "model_id", "prompt_version", "result_json", "input_tokens", "output_tokens", "duration_ms", "created_at",
+    }
+    assert set(Comparison.__table__.columns.keys()) == {
+        "id", "competitor_ids_json", "model_id", "result_json", "created_at",
     }
     with source_engine.connect() as connection:
         assert connection.execute(text("PRAGMA foreign_keys")).scalar_one() == 1

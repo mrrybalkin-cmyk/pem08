@@ -120,3 +120,14 @@ class Analysis(Base):
 
     competitor: Mapped[Competitor] = relationship(back_populates="analyses")
     snapshot: Mapped[SourceSnapshot | None] = relationship(back_populates="analyses")
+
+
+class Comparison(Base):
+    """Historical comparison; JSON participant IDs intentionally have no FK."""
+    __tablename__ = "comparisons"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    competitor_ids_json: Mapped[str] = mapped_column(Text, nullable=False)
+    model_id: Mapped[str] = mapped_column(Text, nullable=False)
+    result_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)

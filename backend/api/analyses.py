@@ -1,4 +1,4 @@
-"""Read-only validated analysis history; no aggregate or comparison pipeline."""
+"""Validated analysis history and competitor-level aggregation."""
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -8,10 +8,11 @@ from backend.database import get_db
 from backend.models.api import AnalysisResponse, SourceErrorResponse
 from backend.repositories import analyses, competitors
 from backend.services.ingestion_service import ResourceNotFound
+from backend.services.analysis_service import analysis_service
 
 router = APIRouter(
     prefix="/api/v2", tags=["analyses"], route_class=SourceRoute,
-    responses={status: {"model": SourceErrorResponse} for status in (404, 500)},
+    responses={status: {"model": SourceErrorResponse} for status in (400, 404, 422, 500, 502, 504)},
 )
 
 
@@ -28,3 +29,8 @@ def get_analysis(analysis_id: str, db: Session = Depends(get_db)):
     if analysis is None:
         raise ResourceNotFound("Analysis not found")
     return analysis
+
+
+@router.post("/competitors/{competitor_id}/aggregate-analysis", response_model=AnalysisResponse, status_code=201)
+async def aggregate_analysis(competitor_id: str, db: Session = Depends(get_db)):
+    return await analysis_service.aggregate_competitor(db, competitor_id)

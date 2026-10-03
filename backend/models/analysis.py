@@ -69,3 +69,64 @@ class PreparedAnalysisInput(AnalysisModel):
     text_context: str
     image_inputs: list[str] = Field(default_factory=list)
     origin_metadata: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class CompetitorComparisonRow(AnalysisModel):
+    competitor_id: str
+    competitor_name: str
+    positioning: str
+    strengths: list[str]
+    gaps: list[str]
+    positioning_clarity: int = Field(ge=0, le=10, strict=True)
+    value_proposition: int = Field(ge=0, le=10, strict=True)
+    trust: int = Field(ge=0, le=10, strict=True)
+    cta_strength: int = Field(ge=0, le=10, strict=True)
+
+
+class ComparisonResult(AnalysisModel):
+    executive_summary: str
+    competitors: list[CompetitorComparisonRow]
+    shared_patterns: list[str]
+    meaningful_differences: list[str]
+    market_gaps: list[str]
+    opportunities: list[str]
+    limitations: list[str]
+
+
+class PreparedSourceAnalysis(AnalysisModel):
+    source_id: str
+    snapshot_id: str
+    source_type: SourceType
+    source_label: str
+    analysis_id: str
+    captured_at: str
+    result: CompetitorAnalysis
+
+
+class AggregateCoverage(AnalysisModel):
+    total_sources: int
+    sources_with_current_analysis: int
+    sources_without_current_analysis: int
+    included_source_ids: tuple[str, ...]
+    omitted_source_ids: tuple[str, ...]
+
+
+class PreparedAggregateInput(AnalysisModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    competitor_id: str
+    competitor_name: str
+    sources: tuple[PreparedSourceAnalysis, ...]
+    coverage: AggregateCoverage
+
+
+class PreparedCompetitorProfile(AnalysisModel):
+    competitor_id: str
+    competitor_name: str
+    analysis_id: str
+    created_at: str
+    result: CompetitorAnalysis
+
+
+class PreparedComparisonInput(AnalysisModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    competitors: tuple[PreparedCompetitorProfile, ...]

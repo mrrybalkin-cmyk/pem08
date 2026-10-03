@@ -7,6 +7,54 @@ from backend.models.analysis import (
 )
 
 
+def test_comparison_complete_schema_round_trip():
+    from backend.models.analysis import ComparisonResult, CompetitorComparisonRow
+    from test_comparisons import comparison_payload
+    payload = comparison_payload(["A", "B"])
+    result = ComparisonResult.model_validate(payload)
+    assert isinstance(result.competitors[0], CompetitorComparisonRow)
+    assert ComparisonResult.model_validate_json(result.model_dump_json(), strict=True) == result
+    for field in ComparisonResult.model_fields:
+        incomplete = payload.copy()
+        del incomplete[field]
+        with pytest.raises(ValidationError):
+            ComparisonResult.model_validate(incomplete)
+    with pytest.raises(ValidationError):
+        ComparisonResult.model_validate({**payload, "unknown": True})
+    for field in CompetitorComparisonRow.model_fields:
+        incomplete = comparison_payload(["A", "B"])
+        del incomplete["competitors"][0][field]
+        with pytest.raises(ValidationError):
+            ComparisonResult.model_validate(incomplete)
+    for field in ("competitor_name", "positioning", "strengths", "gaps"):
+        wrong_type = comparison_payload(["A", "B"])
+        wrong_type["competitors"][0][field] = 123
+        with pytest.raises(ValidationError):
+            ComparisonResult.model_validate(wrong_type)
+
+
+@pytest.mark.parametrize("score", [-1, 11, "5", 5.2, True, None])
+def test_comparison_score_strictness(score):
+    from backend.models.analysis import ComparisonResult
+    from test_comparisons import comparison_payload
+    payload = comparison_payload(["A", "B"])
+    payload["competitors"][0]["trust"] = score
+    with pytest.raises(ValidationError):
+        ComparisonResult.model_validate(payload)
+
+
+@pytest.mark.parametrize("score", [0, 10])
+def test_comparison_score_bounds_and_nested_extra(score):
+    from backend.models.analysis import ComparisonResult
+    from test_comparisons import comparison_payload
+    payload = comparison_payload(["A", "B"])
+    payload["competitors"][0]["trust"] = score
+    assert ComparisonResult.model_validate(payload).competitors[0].trust == score
+    payload["competitors"][0]["unknown"] = True
+    with pytest.raises(ValidationError):
+        ComparisonResult.model_validate(payload)
+
+
 def test_full_analysis_and_json_round_trip(analysis_payload):
     model = CompetitorAnalysis.model_validate(analysis_payload)
     assert isinstance(model.scorecard, AnalysisScorecard)

@@ -39,3 +39,17 @@ def get_latest_competitor_analysis(db: Session, competitor_id: str) -> Analysis 
         select(Analysis).where(Analysis.competitor_id == competitor_id)
         .order_by(Analysis.created_at.desc(), Analysis.id.desc()).limit(1)
     )
+
+
+def get_latest_snapshot_analysis(db: Session, snapshot_id: str) -> Analysis | None:
+    return db.scalar(
+        select(Analysis).where(Analysis.snapshot_id == snapshot_id, Analysis.analysis_type == "source")
+        .order_by(Analysis.created_at.desc(), Analysis.id.desc()).limit(1)
+    )
+
+
+def get_latest_aggregate(db: Session, competitor_id: str) -> Analysis | None:
+    return db.scalar(
+        select(Analysis).where(Analysis.competitor_id == competitor_id, Analysis.analysis_type == "aggregate")
+        .order_by(Analysis.created_at.desc(), Analysis.id.desc()).limit(1)
+    )

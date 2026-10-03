@@ -101,7 +101,7 @@ def test_lifespan_initializes_competitor_table(app):
 
         assert app.state.database_ready is True
         assert "competitors" in tables
-        assert {"sources", "source_snapshots", "analyses"} <= set(tables)
+        assert {"sources", "source_snapshots", "analyses", "comparisons"} <= set(tables)
 
     assert app.state.database_ready is False
 

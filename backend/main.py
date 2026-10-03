@@ -17,6 +17,7 @@ from backend.api.health import router as health_router
 from backend.api.competitors import router as competitors_router
 from backend.api.sources import router as sources_router
 from backend.api.analyses import router as analyses_router
+from backend.api.comparisons import router as comparisons_router
 from backend.models.schemas import (
     TextAnalysisRequest,
     TextAnalysisResponse,
@@ -80,6 +81,7 @@ app.include_router(health_router)
 app.include_router(competitors_router)
 app.include_router(sources_router)
 app.include_router(analyses_router)
+app.include_router(comparisons_router)
 
 
 # === Эндпоинты ===

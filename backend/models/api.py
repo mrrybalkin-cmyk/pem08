@@ -160,3 +160,15 @@ class SourceErrorDetail(BaseModel):
 
 class SourceErrorResponse(BaseModel):
     error: SourceErrorDetail
+
+
+class ComparisonRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    competitor_ids: list[str] = Field(min_length=2, max_length=5)
+
+    @field_validator("competitor_ids")
+    @classmethod
+    def unique_ids(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value):
+            raise ValueError("competitor_ids must be unique")
+        return value

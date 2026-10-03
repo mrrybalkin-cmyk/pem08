@@ -29,6 +29,121 @@ def completion(parsed, *, finish_reason="stop", refusal=None):
     )])
 
 
+def stage7_input_and_output(mode, analysis_payload):
+    from backend.models.analysis import (
+        AggregateCoverage, ComparisonResult, PreparedAggregateInput, PreparedSourceAnalysis,
+        PreparedComparisonInput, PreparedCompetitorProfile,
+    )
+    from test_comparisons import comparison_payload
+    result = CompetitorAnalysis.model_validate(analysis_payload)
+    if mode == "aggregate":
+        payload = PreparedAggregateInput(competitor_id="A", competitor_name="Alpha",
+            sources=(PreparedSourceAnalysis(source_id="source-1", snapshot_id="snapshot-1", source_type="text",
+                source_label="Описание", analysis_id="analysis-1", captured_at="2026-01-01", result=result),),
+            coverage=AggregateCoverage(total_sources=2, sources_with_current_analysis=1,
+                sources_without_current_analysis=1, included_source_ids=("source-1",), omitted_source_ids=("source-2",)))
+        return payload, result, "aggregate_competitor"
+    payload = PreparedComparisonInput(competitors=tuple(PreparedCompetitorProfile(
+        competitor_id=cid, competitor_name="Alpha", analysis_id="aggregate-" + cid, created_at="2026-01-01",
+        result=result) for cid in ("A", "B")))
+    return payload, ComparisonResult.model_validate(comparison_payload(["A", "B"])), "compare_competitors"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["aggregate", "comparison"])
+async def test_stage7_lazy_structured_prompts_and_config(v2_boundary, analysis_payload, mode, monkeypatch):
+    from backend.config import settings
+    from backend.services.prompt_service import AGGREGATE_PROMPT_VERSION, COMPARISON_PROMPT_VERSION
+    payload, result, method = stage7_input_and_output(mode, analysis_payload)
+    client, constructor = v2_boundary
+    client.chat.completions.parse.return_value = completion(result)
+    monkeypatch.setattr(settings, "ai_model", "stage7-test-model")
+    service = AIService()
+    constructor.assert_not_called()
+    actual = await getattr(service, method)(payload)
+    assert actual == result
+    kwargs = client.chat.completions.parse.await_args.kwargs
+    assert kwargs["model"] == "stage7-test-model"
+    assert kwargs["response_format"] is type(result)
+    assert json.loads(kwargs["messages"][1]["content"]) == payload.model_dump(mode="json")
+    policy = kwargs["messages"][0]["content"]
+    assert "limitations" in policy
+    if mode == "aggregate":
+        assert "omitted_source_ids" in policy and "source_hint" in policy and "rationale" in policy
+    else:
+        for criterion in ("positioning_clarity", "value_proposition", "trust", "cta_strength"):
+            assert criterion in policy
+    assert AGGREGATE_PROMPT_VERSION == "competitor-aggregate-v1.0"
+    assert COMPARISON_PROMPT_VERSION == "competitor-comparison-v1.0"
+    await service.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["aggregate", "comparison"])
+@pytest.mark.parametrize("failure", ["missing", "mutated", "refusal", "timeout", "provider", "missing_key"])
+async def test_stage7_provider_failures(v2_boundary, analysis_payload, mode, failure, monkeypatch):
+    from backend.config import settings
+    from openai import APIError, APITimeoutError
+    import httpx2
+    payload, result, method = stage7_input_and_output(mode, analysis_payload)
+    client, constructor = v2_boundary
+    client.chat.completions.parse.return_value = completion(result)
+    expected = AIResponseError
+    if failure in {"timeout", "provider"}:
+        request = httpx2.Request("POST", "https://provider.invalid")
+        client.chat.completions.parse.side_effect = APITimeoutError(request=request) if failure == "timeout" else APIError("injected", request, body=None)
+        expected = AIProviderTimeoutError if failure == "timeout" else AIProviderError
+    elif failure == "missing_key":
+        monkeypatch.setattr(settings, "ai_api_key", SecretStr(""))
+        expected = V2ConfigurationError
+    elif failure == "missing":
+        client.chat.completions.parse.return_value = completion(None)
+    elif failure == "refusal":
+        client.chat.completions.parse.return_value = completion(result, refusal="Refused")
+    elif mode == "aggregate":
+        result.scorecard.trust.score = 11
+    else:
+        result.competitors[0].trust = 11
+    service = AIService()
+    with pytest.raises(expected):
+        await getattr(service, method)(payload)
+    if failure == "missing_key":
+        constructor.assert_not_called()
+        client.chat.completions.parse.assert_not_awaited()
+    await service.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["aggregate", "comparison"])
+@pytest.mark.parametrize("valid", [False, True])
+async def test_stage7_actual_sdk_wire_strictness(monkeypatch, analysis_payload, mode, valid):
+    from openai import AsyncOpenAI
+    from openai.types.chat import ChatCompletion
+    payload, result, method = stage7_input_and_output(mode, analysis_payload)
+    client = AsyncOpenAI(api_key="test-only-wire-key")
+    content = result.model_dump_json() if valid else '{"executive_summary":"Incomplete"}'
+    raw = ChatCompletion.model_validate({"id": "test", "object": "chat.completion", "created": 0, "model": "test",
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": content}}]})
+
+    async def fake_post(path, **kwargs):
+        schema = kwargs["body"]["response_format"]["json_schema"]
+        assert schema["strict"] is True
+        assert schema["schema"]["additionalProperties"] is False
+        return kwargs["options"]["post_parser"](raw)
+
+    monkeypatch.setattr(client.chat.completions, "_post", fake_post)
+    service = AIService()
+    service._client = client
+    try:
+        if valid:
+            assert await getattr(service, method)(payload) == result
+        else:
+            with pytest.raises(AIResponseError):
+                await getattr(service, method)(payload)
+    finally:
+        await service.close()
+
+
 @pytest.fixture
 def v2_boundary(monkeypatch, analysis_payload):
     from backend.config import settings
