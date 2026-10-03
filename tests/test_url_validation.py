@@ -190,5 +190,6 @@ def test_startup_health_has_no_dns_or_safety_side_effects(app, monkeypatch):
     with TestClient(app) as client:
         assert client.get("/api/v2/health").status_code == 200
         paths = client.get("/openapi.json").json()["paths"]
-        assert not any("/sources/url" in path or path.endswith("/refresh") for path in paths)
+        assert any("/sources/url" in path for path in paths)
+        assert any(path.endswith("/refresh") for path in paths)
     dns.assert_not_called()

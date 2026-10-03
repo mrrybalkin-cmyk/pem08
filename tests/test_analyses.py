@@ -74,7 +74,7 @@ def test_history_unknown_resources_and_openapi(source_api):
     detail = paths["/api/v2/competitors/{competitor_id}"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
     assert detail["$ref"].endswith("/CompetitorDetailResponse")
     assert "post" in paths["/api/v2/sources/{source_id}/reanalyze"]
-    assert not any("aggregate" in path or "comparison" in path or "refresh" in path for path in paths)
+    assert not any("aggregate" in path or "comparison" in path for path in paths)
 
 
 def test_reanalyze_uses_latest_snapshot(source_api):

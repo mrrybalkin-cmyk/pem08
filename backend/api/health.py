@@ -6,6 +6,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from backend.config import settings
+from backend.services.browser_service import browser_service
 
 router = APIRouter(
     prefix="/api/v2",
@@ -20,7 +21,7 @@ class HealthResponse(BaseModel):
         "ready",
         "not_initialized",
     ]
-    browser: Literal["not_initialized"] = "not_initialized"
+    browser: Literal["not_initialized", "ready"] = "not_initialized"
     ai_configured: bool
 
 
@@ -43,5 +44,6 @@ async def health(
             if database_ready
             else "not_initialized"
         ),
+        browser="ready" if browser_service.ready else "not_initialized",
         ai_configured=settings.ai_configured,
     )

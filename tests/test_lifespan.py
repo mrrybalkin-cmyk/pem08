@@ -13,6 +13,7 @@ def test_repeated_lifecycle_does_not_create_clients(app, monkeypatch):
     history_before = settings.history_file.read_bytes() if history_existed else None
     monkeypatch.setattr("backend.services.openai_service.OpenAI", constructor)
     monkeypatch.setattr("backend.services.ai_service.AsyncOpenAI", constructor)
+    monkeypatch.setattr("backend.services.browser_service.browser_service.factory", constructor)
     from backend.services.ai_service import ai_service
     for _ in range(2):
         with TestClient(app):
@@ -27,6 +28,19 @@ def test_repeated_lifecycle_does_not_create_clients(app, monkeypatch):
     assert settings.history_file.exists() is history_existed
     if history_existed:
         assert settings.history_file.read_bytes() == history_before
+
+
+def test_browser_closed_even_if_ai_cleanup_fails(app, monkeypatch):
+    from unittest.mock import AsyncMock
+    from backend.services.ai_service import ai_service
+    from backend.services.browser_service import browser_service
+    close = AsyncMock()
+    monkeypatch.setattr(browser_service, "close", close)
+    monkeypatch.setattr(ai_service, "close", AsyncMock(side_effect=RuntimeError("AI cleanup failed")))
+    with pytest.raises(RuntimeError):
+        with TestClient(app):
+            pass
+    close.assert_awaited_once()
 
 
 @pytest.mark.asyncio

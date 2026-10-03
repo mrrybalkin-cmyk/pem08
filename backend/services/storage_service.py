@@ -120,3 +120,12 @@ class StorageService:
         path = self.resolve(removed.storage_path)
         with path.open("xb") as stream:
             stream.write(removed.content)
+
+
+class ScreenshotStorage(StorageService):
+    """Snapshot artifacts: only application-owned flat UUID PNG filenames."""
+
+    def resolve(self, storage_path: str) -> Path:
+        if not isinstance(storage_path, str) or Path(storage_path).suffix != ".png":
+            raise ValueError("Invalid screenshot path")
+        return super().resolve(storage_path)

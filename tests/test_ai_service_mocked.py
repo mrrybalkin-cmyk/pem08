@@ -246,6 +246,27 @@ async def test_v2_pdf_structured_payload(v2_boundary, prepared_input, analysis_p
 
 
 @pytest.mark.asyncio
+async def test_v2_url_snapshot_multimodal_structured_output(v2_boundary, prepared_input, analysis_payload):
+    from backend.services.document_service import image_data_url
+    from test_sources import image_bytes
+    prepared_input.source_type = SourceType.url
+    prepared_input.image_inputs = [image_data_url(image_bytes(), "image/png")]
+    prepared_input.origin_metadata = {"requested_url": "https://public.example/", "final_url": "https://public.example/final",
+        "title": "Title", "meta_description": "Description", "captured_at": "2026-10-03T00:00:00", "text_truncated": True}
+    client, _ = v2_boundary
+    service = AIService()
+    result = await service.analyze_source(prepared_input)
+    assert result.model_dump(mode="json") == analysis_payload
+    kwargs = client.chat.completions.parse.await_args.kwargs
+    assert kwargs["response_format"] is CompetitorAnalysis
+    parts = kwargs["messages"][1]["content"]
+    assert json.loads(parts[0]["text"])["origin_metadata"] == prepared_input.origin_metadata
+    assert parts[1]["image_url"]["url"] == prepared_input.image_inputs[0]
+    assert "captured snapshot" in kwargs["messages"][0]["content"]
+    await service.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["invalid", "timeout"])
 async def test_v2_pdf_provider_failure(v2_boundary, prepared_input, failure):
     from openai import APITimeoutError

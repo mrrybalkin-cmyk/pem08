@@ -82,6 +82,12 @@ class TextSourceCreate(BaseModel):
         return value
 
 
+class UrlSourceCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    label: str = Field(default="Сайт", max_length=120)
+    url: HttpUrl
+
+
 class SourceResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str

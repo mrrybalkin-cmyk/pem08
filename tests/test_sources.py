@@ -325,7 +325,7 @@ def test_openapi_source_schemas(source_api):
     assert "multipart/form-data" in paths["/api/v2/competitors/{competitor_id}/sources/file"]["post"]["requestBody"]["content"]
     assert {"get", "delete"} <= paths["/api/v2/sources/{source_id}"].keys()
     assert "post" in paths["/api/v2/sources/{source_id}/reanalyze"]
-    assert not any("refresh" in path or path.endswith("/sources/url") or "comparison" in path or "aggregate" in path for path in paths)
+    assert not any("comparison" in path or "aggregate" in path for path in paths)
 
 
 def test_invalid_result_not_persisted(source_api):

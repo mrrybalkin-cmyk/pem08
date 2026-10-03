@@ -16,8 +16,10 @@ from backend.models.api import CompetitorDetailResponse, SourceDetailResponse, T
 from backend.repositories import analyses, competitors, sources
 from backend.services.ai_service import AIResponseError, ai_service
 from backend.services.prompt_service import ANALYSIS_PROMPT_VERSION
+from backend.services.browser_service import browser_service
+from backend.security.url_validation import InvalidURL, validate_url
 from backend.services.document_service import InvalidPDF, prepare_pdf, image_data_url, add_pdf_limitations
-from backend.services.storage_service import InvalidImage, StorageService, validate_image
+from backend.services.storage_service import InvalidImage, StorageService, ScreenshotStorage, validate_image
 
 
 class ResourceNotFound(LookupError):
@@ -157,8 +159,69 @@ class IngestionService:
                 await _offload(lambda: storage.delete(stored.storage_path))
             raise
 
-    async def reanalyze(self, db: Session, source_id: str) -> SourceDetailResponse:
-        prepared, competitor_id, snapshot_id = await _offload(lambda: _load_prepared(db, source_id))
+    async def ingest_url(self, db: Session, competitor_id: str, payload):
+        await _offload(lambda: _competitor_name(db, competitor_id))
+        requested = validate_url(str(payload.url)).url
+        return await self._capture_url(db, competitor_id, requested, payload.label)
+
+    async def refresh(self, db: Session, source_id: str):
+        def load():
+            try:
+                source = sources.get_source(db, source_id)
+                if source is None:
+                    raise ResourceNotFound("Source not found")
+                if source.source_type != SourceType.url:
+                    raise InvalidURL("SOURCE_NOT_REFRESHABLE")
+                return source.competitor_id, source.url, source.label
+            finally:
+                db.rollback()
+        competitor_id, requested, label = await _offload(load)
+        return await self._capture_url(db, competitor_id, requested, label, source_id=source_id)
+
+    async def _capture_url(self, db, competitor_id, requested, label, *, source_id=None):
+        capture = await browser_service.capture(requested)
+        storage = ScreenshotStorage(settings.screenshot_dir)
+        stored = None
+        committed = False
+        cancelled = Event()
+        new_source = source_id is None
+        source_id = source_id or str(uuid4())
+        snapshot_id = str(uuid4())
+        try:
+            def save():
+                nonlocal stored
+                validate_image(capture.screenshot, "image/png", settings.max_image_mb * 1024 * 1024)
+                stored = storage.save(capture.screenshot, ".png")
+            await _offload(save)
+            def persist():
+                nonlocal committed
+                try:
+                    if new_source:
+                        sources.create_source(db, id=source_id, competitor_id=competitor_id,
+                                              source_type=SourceType.url, label=label, url=capture.requested_url)
+                    elif sources.get_source(db, source_id) is None:
+                        raise ResourceNotFound("Source not found")
+                    metadata = {**capture.metadata, "source_id": source_id, "snapshot_id": snapshot_id,
+                                "screenshot_sha256": stored.sha256}
+                    sources.create_snapshot(db, id=snapshot_id, source_id=source_id,
+                        final_url=capture.final_url, title=capture.title, meta_description=capture.meta_description,
+                        extracted_text=capture.extracted_text, screenshot_path=stored.storage_path, metadata=metadata)
+                    if cancelled.is_set():
+                        raise asyncio.CancelledError()
+                    db.commit()
+                    committed = True
+                except BaseException:
+                    db.rollback()
+                    raise
+            await _offload(persist, on_cancel=cancelled.set)
+            return await self.reanalyze(db, source_id, snapshot_id=snapshot_id)
+        except BaseException:
+            if stored is not None and not committed:
+                await _offload(lambda: storage.delete(stored.storage_path))
+            raise
+
+    async def reanalyze(self, db: Session, source_id: str, *, snapshot_id=None) -> SourceDetailResponse:
+        prepared, competitor_id, snapshot_id = await _offload(lambda: _load_prepared(db, source_id, snapshot_id))
         model_id = settings.ai_model
         start = perf_counter()
         result = await ai_service.analyze_source(prepared)
@@ -194,13 +257,13 @@ class IngestionService:
         return await _offload(persist_analysis)
 
 
-def _load_prepared(db: Session, source_id: str):
+def _load_prepared(db: Session, source_id: str, snapshot_id=None):
     try:
         source = sources.get_source(db, source_id)
         if source is None:
             raise ResourceNotFound("Source not found")
-        snapshot = sources.get_latest_snapshot(db, source_id)
-        if snapshot is None:
+        snapshot = sources.get_snapshot(db, snapshot_id) if snapshot_id else sources.get_latest_snapshot(db, source_id)
+        if snapshot is None or snapshot.source_id != source_id:
             raise OSError("Source has no persisted snapshot")
         competitor = competitors.get_competitor(db, source.competitor_id)
         if competitor is None:
@@ -213,6 +276,10 @@ def _load_prepared(db: Session, source_id: str):
             origin_metadata=json.loads(snapshot.metadata_json), image_inputs=[],
         )
         storage_path, mime_type, sha256 = source.storage_path, source.mime_type, source.sha256
+        screenshot_path = snapshot.screenshot_path
+        if source.source_type == SourceType.url:
+            fields["origin_metadata"].update(title=snapshot.title, meta_description=snapshot.meta_description,
+                                            captured_at=snapshot.captured_at.isoformat(), final_url=snapshot.final_url)
         fields["origin_metadata"].update(source_id=source_id, snapshot_id=snapshot_id)
     finally:
         db.rollback()
@@ -242,6 +309,15 @@ def _load_prepared(db: Session, source_id: str):
             fields["image_inputs"] = document.image_inputs
         except (ValueError, TypeError, KeyError, InvalidPDF) as exc:
             raise OSError("Persisted PDF is not valid") from exc
+    elif fields["source_type"] == SourceType.url:
+        try:
+            content = ScreenshotStorage(settings.screenshot_dir).read(screenshot_path, settings.max_image_mb * 1024 * 1024)
+            validate_image(content, "image/png", settings.max_image_mb * 1024 * 1024)
+            if hashlib.sha256(content).hexdigest() != fields["origin_metadata"]["screenshot_sha256"]:
+                raise OSError("Persisted screenshot hash mismatch")
+        except (ValueError, TypeError, KeyError) as exc:
+            raise OSError("Persisted screenshot is not valid") from exc
+        fields["image_inputs"] = [image_data_url(content, "image/png")]
     elif fields["source_type"] != SourceType.text:
         raise OSError("Source type is not supported in this stage")
     elif not fields["text_context"].strip():
@@ -257,15 +333,22 @@ def _delete_with_files(db: Session, records, delete_operation) -> None:
             if record.storage_path:
                 backup = storage.remove_reversibly(record.storage_path)
                 if backup is not None:
-                    removed.append(backup)
+                    removed.append((storage, backup))
+            screenshots = ScreenshotStorage(settings.screenshot_dir)
+            for snapshot in sources.list_snapshots(db, record.id):
+                for path in (snapshot.screenshot_path, snapshot.secondary_screenshot_path):
+                    if path:
+                        backup = screenshots.remove_reversibly(path)
+                        if backup is not None:
+                            removed.append((screenshots, backup))
         delete_operation()
         db.commit()
     except BaseException:
         try:
             db.rollback()
         finally:
-            for backup in removed:
-                storage.restore(backup)
+            for owner, backup in removed:
+                owner.restore(backup)
         raise
 
 

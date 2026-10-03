@@ -8,11 +8,13 @@ from sqlalchemy.orm import Session
 
 from backend.config import settings
 from backend.database import get_db
-from backend.models.api import SourceDetailResponse, SourceErrorResponse, TextSourceCreate
+from backend.models.api import SourceDetailResponse, SourceErrorResponse, TextSourceCreate, UrlSourceCreate
 from backend.services.ai_service import AIConfigurationError, AIProviderError, AIProviderTimeoutError
 from backend.services.ingestion_service import ResourceNotFound, delete_source, ingestion_service, source_detail
 from backend.services.storage_service import ImageTooLarge, InvalidImage
 from backend.services.document_service import InvalidPDF, PDFTooLarge
+from backend.security.url_validation import InvalidURL
+from backend.services.browser_service import BrowserCaptureError, BrowserTimeoutError
 
 
 class SourceRoute(APIRoute):
@@ -22,6 +24,12 @@ class SourceRoute(APIRoute):
         async def safe_handler(request):
             try:
                 return await handler(request)
+            except InvalidURL as exc:
+                status, code, message = 400, exc.code, str(exc)
+            except BrowserTimeoutError:
+                status, code, message = 504, "BROWSER_TIMEOUT", "Browser capture timed out"
+            except BrowserCaptureError:
+                status, code, message = 500, "BROWSER_ERROR", "Browser capture failed; upload a screenshot instead"
             except ResourceNotFound:
                 status, code, message = 404, "NOT_FOUND", "Requested resource not found"
             except PDFTooLarge:
@@ -96,3 +104,13 @@ async def reanalyze_source(source_id: str, db: Session = Depends(get_db)):
 def remove_source(source_id: str, db: Session = Depends(get_db)):
     delete_source(db, source_id)
     return Response(status_code=204)
+
+
+@router.post("/competitors/{competitor_id}/sources/url", response_model=SourceDetailResponse, status_code=201)
+async def create_url_source(competitor_id: str, payload: UrlSourceCreate, db: Session = Depends(get_db)):
+    return await ingestion_service.ingest_url(db, competitor_id, payload)
+
+
+@router.post("/sources/{source_id}/refresh", response_model=SourceDetailResponse, status_code=201)
+async def refresh_source(source_id: str, db: Session = Depends(get_db)):
+    return await ingestion_service.refresh(db, source_id)

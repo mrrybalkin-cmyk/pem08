@@ -28,6 +28,10 @@ def build_analysis_messages(prepared_input: PreparedAnalysisInput) -> list[dict]
             "page_count is the total; partial_analysis means incomplete coverage. " \
             "Images follow selected_pages order. Evidence must refer only to provided pages. " \
             "Respect text_truncated and state incomplete coverage in limitations."
+    elif prepared_input.source_type == "url":
+        policy = SYSTEM_PROMPT + "\nURL evidence is limited to the captured snapshot, not the live website. " \
+            "Use requested_url, final_url, title, meta_description and captured_at as context. " \
+            "Respect text_truncated; screenshot shows only the captured viewport."
     else:
         policy = SYSTEM_PROMPT
     if prepared_input.image_inputs:
