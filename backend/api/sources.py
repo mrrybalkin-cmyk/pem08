@@ -12,6 +12,7 @@ from backend.models.api import SourceDetailResponse, SourceErrorResponse, TextSo
 from backend.services.ai_service import AIConfigurationError, AIProviderError, AIProviderTimeoutError
 from backend.services.ingestion_service import ResourceNotFound, delete_source, ingestion_service, source_detail
 from backend.services.storage_service import ImageTooLarge, InvalidImage
+from backend.services.document_service import InvalidPDF, PDFTooLarge
 
 
 class SourceRoute(APIRoute):
@@ -23,6 +24,10 @@ class SourceRoute(APIRoute):
                 return await handler(request)
             except ResourceNotFound:
                 status, code, message = 404, "NOT_FOUND", "Requested resource not found"
+            except PDFTooLarge:
+                status, code, message = 413, "PDF_TOO_LARGE", "PDF exceeds MAX_PDF_MB"
+            except InvalidPDF:
+                status, code, message = 400, "INVALID_PDF", "Only valid unencrypted PDF files are supported"
             except ImageTooLarge:
                 status, code, message = 413, "IMAGE_TOO_LARGE", "Image exceeds MAX_IMAGE_MB"
             except InvalidImage:
@@ -53,13 +58,22 @@ async def create_text_source(competitor_id: str, payload: TextSourceCreate, db: 
     return await ingestion_service.ingest_text(db, competitor_id, payload)
 
 
-@router.post("/competitors/{competitor_id}/sources/file", response_model=SourceDetailResponse, status_code=201)
-async def create_image_source(
+@router.post("/competitors/{competitor_id}/sources/file", response_model=SourceDetailResponse, status_code=201, summary="Upload JPEG/PNG/WebP image or PDF and analyze")
+async def create_file_source(
     competitor_id: str, file: UploadFile = File(...),
-    label: str = Form(default="Изображение", max_length=120), db: Session = Depends(get_db),
+    label: str = Form(default="Файл", max_length=120), db: Session = Depends(get_db),
 ):
     try:
-        content = await file.read(settings.max_image_mb * 1024 * 1024 + 1)
+        cap = max(settings.max_image_mb, settings.max_pdf_mb) * 1024 * 1024
+        content = await file.read(cap + 1)
+        # Check spoofing before type-specific size validation; never read beyond cap.
+        if content.startswith(b"%PDF") and file.content_type != "application/pdf":
+            raise InvalidImage("PDF declared as image")
+        if file.content_type == "application/pdf":
+            return await ingestion_service.ingest_pdf(
+                db, competitor_id, label=label, content=content,
+                filename=file.filename or "", declared_mime=file.content_type,
+            )
         return await ingestion_service.ingest_image(
             db, competitor_id, label=label, content=content,
             filename=file.filename or "", declared_mime=file.content_type,

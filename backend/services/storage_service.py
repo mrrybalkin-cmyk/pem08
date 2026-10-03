@@ -78,7 +78,7 @@ class StorageService:
         if name.name != storage_path or any(char in storage_path for char in ("/", "\\", ":")):
             raise ValueError("Unsafe storage path")
         UUID(name.stem)
-        if name.suffix not in {item[1] for item in FORMATS.values()}:
+        if name.suffix not in ({item[1] for item in FORMATS.values()} | {".pdf"}):
             raise ValueError("Unsupported storage extension")
         path = (self.upload_dir / name).resolve()
         if path.parent != self.upload_dir:

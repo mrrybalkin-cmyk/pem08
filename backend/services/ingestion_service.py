@@ -1,7 +1,6 @@
 """Persist retryable sources first, then append validated analyses separately."""
 
 import asyncio
-import base64
 import hashlib
 import json
 from threading import Event
@@ -17,6 +16,7 @@ from backend.models.api import CompetitorDetailResponse, SourceDetailResponse, T
 from backend.repositories import analyses, competitors, sources
 from backend.services.ai_service import AIResponseError, ai_service
 from backend.services.prompt_service import ANALYSIS_PROMPT_VERSION
+from backend.services.document_service import InvalidPDF, prepare_pdf, image_data_url, add_pdf_limitations
 from backend.services.storage_service import InvalidImage, StorageService, validate_image
 
 
@@ -83,9 +83,15 @@ class IngestionService:
             db, competitor_id, label, content=content, filename=filename, declared_mime=declared_mime,
         )
 
+    async def ingest_pdf(self, db: Session, competitor_id: str, *, label: str,
+                         content: bytes, filename: str, declared_mime: str | None):
+        return await self._ingest(db, competitor_id, label, content=content,
+                                  filename=filename, declared_mime=declared_mime, pdf=True)
+
     async def _ingest(
         self, db: Session, competitor_id: str, label: str, *, text: str | None = None,
         content: bytes | None = None, filename: str | None = None, declared_mime: str | None = None,
+        pdf: bool = False,
     ) -> SourceDetailResponse:
         await _offload(lambda: _competitor_name(db, competitor_id))
         source_id, snapshot_id = str(uuid4()), str(uuid4())
@@ -96,24 +102,34 @@ class IngestionService:
         metadata = {"source_id": source_id, "snapshot_id": snapshot_id}
         source_fields = {
             "id": source_id, "competitor_id": competitor_id, "label": label,
-            "source_type": SourceType.text if content is None else SourceType.image,
+            "source_type": SourceType.pdf if pdf else (SourceType.text if content is None else SourceType.image),
         }
         try:
             if content is not None:
-                image = await _offload(lambda: validate_image(content, declared_mime, settings.max_image_mb * 1024 * 1024))
+                if pdf:
+                    document = await _offload(lambda: prepare_pdf(
+                        content, declared_mime, settings.max_pdf_mb * 1024 * 1024,
+                        settings.max_pdf_pages_analyzed, settings.max_text_chars))
+                    text = document.extracted_text
+                    metadata.update(document.metadata)
+                    del document  # Rebuilt from persisted bytes; release temporary page images.
+                    extension, mime_type = ".pdf", "application/pdf"
+                else:
+                    image = await _offload(lambda: validate_image(content, declared_mime, settings.max_image_mb * 1024 * 1024))
+                    extension, mime_type = image.extension, image.mime_type
+                    metadata.update(width=image.width, height=image.height)
 
                 def save_file():
                     nonlocal stored
-                    stored = storage.save(content, image.extension)
+                    stored = storage.save(content, extension)
 
                 await _offload(save_file)
                 source_fields.update(
-                    original_filename=filename, mime_type=image.mime_type,
+                    original_filename=filename, mime_type=mime_type,
                     storage_path=stored.storage_path, sha256=stored.sha256,
                 )
                 metadata.update(
-                    original_filename=filename, mime_type=image.mime_type,
-                    width=image.width, height=image.height,
+                    original_filename=filename, mime_type=mime_type,
                     storage_path=stored.storage_path, sha256=stored.sha256,
                 )
 
@@ -152,6 +168,8 @@ class IngestionService:
             result = CompetitorAnalysis.model_validate_json(result.model_dump_json(), strict=True)
         except ValidationError as exc:
             raise AIResponseError("Invalid CompetitorAnalysis") from exc
+        if prepared.source_type == SourceType.pdf:
+            result = add_pdf_limitations(result, prepared.origin_metadata)
         duration_ms = round((perf_counter() - start) * 1000)
 
         def persist_analysis():
@@ -208,8 +226,22 @@ def _load_prepared(db: Session, source_id: str):
             raise OSError("Persisted image is not valid") from exc
         if hashlib.sha256(content).hexdigest() != sha256:
             raise OSError("Persisted image hash mismatch")
-        fields["image_inputs"] = [f"data:{image.mime_type};base64,{base64.b64encode(content).decode('ascii')}"]
+        fields["image_inputs"] = [image_data_url(content, image.mime_type)]
         fields["text_context"] = "Анализ предоставленного изображения"
+    elif fields["source_type"] == SourceType.pdf:
+        try:
+            content = StorageService(settings.upload_dir).read(storage_path, settings.max_pdf_mb * 1024 * 1024)
+            if hashlib.sha256(content).hexdigest() != sha256:
+                raise OSError("Persisted PDF hash mismatch")
+            metadata = fields["origin_metadata"]
+            document = prepare_pdf(content, mime_type, settings.max_pdf_mb * 1024 * 1024,
+                                   metadata["analyzed_page_limit"], metadata["text_char_limit"],
+                                   selected_pages=metadata["selected_pages"])
+            if document.metadata["page_count"] != metadata["page_count"]:
+                raise OSError("Persisted PDF page count mismatch")
+            fields["image_inputs"] = document.image_inputs
+        except (ValueError, TypeError, KeyError, InvalidPDF) as exc:
+            raise OSError("Persisted PDF is not valid") from exc
     elif fields["source_type"] != SourceType.text:
         raise OSError("Source type is not supported in this stage")
     elif not fields["text_context"].strip():

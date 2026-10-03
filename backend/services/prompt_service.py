@@ -23,6 +23,13 @@ visual_consistency, ux_clarity. Каждый доступный score — цел
 
 
 def build_analysis_messages(prepared_input: PreparedAnalysisInput) -> list[dict]:
+    if prepared_input.source_type == "pdf":
+        policy = SYSTEM_PROMPT + "\nPDF: selected_pages lists the only provided pages (1-based). " \
+            "page_count is the total; partial_analysis means incomplete coverage. " \
+            "Images follow selected_pages order. Evidence must refer only to provided pages. " \
+            "Respect text_truncated and state incomplete coverage in limitations."
+    else:
+        policy = SYSTEM_PROMPT
     if prepared_input.image_inputs:
         # Image bytes are separate multimodal parts, never duplicated in JSON text.
         context = prepared_input.model_dump_json(exclude={"image_inputs"})
@@ -31,6 +38,6 @@ def build_analysis_messages(prepared_input: PreparedAnalysisInput) -> list[dict]
     else:
         content = prepared_input.model_dump_json()
     return [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": policy},
         {"role": "user", "content": content},
     ]

@@ -61,11 +61,11 @@ class AIService:
         return self._client
 
     async def analyze_source(self, prepared_input: PreparedAnalysisInput) -> CompetitorAnalysis:
-        if prepared_input.source_type not in {SourceType.text, SourceType.image}:
-            raise ValueError("Only prepared text/image input is supported")
+        if prepared_input.source_type not in {SourceType.text, SourceType.image, SourceType.pdf}:
+            raise ValueError("Only prepared text/image/PDF input is supported")
         if prepared_input.source_type == SourceType.text and prepared_input.image_inputs:
             raise ValueError("Prepared text input cannot contain images")
-        if prepared_input.source_type == SourceType.image:
+        if prepared_input.source_type == SourceType.image or prepared_input.image_inputs:
             if not prepared_input.image_inputs:
                 raise ValueError("Prepared image input requires an image")
             for url in prepared_input.image_inputs:

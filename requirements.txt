@@ -13,3 +13,4 @@ Pillow>=10.0.0
 selenium>=4.15.0
 webdriver-manager>=4.0.0
 SQLAlchemy>=2.0,<3.0
+PyMuPDF>=1.28.2,<2

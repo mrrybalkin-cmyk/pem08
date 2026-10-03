@@ -216,6 +216,53 @@ async def test_v2_rejects_unsupported_image_inputs(v2_boundary, prepared_input, 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("visual", [False, True])
+async def test_v2_pdf_structured_payload(v2_boundary, prepared_input, analysis_payload, visual):
+    from backend.services.document_service import prepare_pdf
+    from test_documents import pdf_bytes
+    prepared = prepare_pdf(pdf_bytes(2, "scanned" if visual else "text"),
+                           "application/pdf", 100000, 8, 30000)
+    prepared_input.source_type = SourceType.pdf
+    prepared_input.text_context = prepared.extracted_text
+    prepared_input.origin_metadata = prepared.metadata
+    prepared_input.image_inputs = prepared.image_inputs if visual else []
+    client, constructor = v2_boundary
+    service = AIService()
+    constructor.assert_not_called()
+    result = await service.analyze_source(prepared_input)
+    assert result.model_dump(mode="json") == analysis_payload
+    kwargs = client.chat.completions.parse.await_args.kwargs
+    assert kwargs["response_format"] is CompetitorAnalysis
+    content = kwargs["messages"][1]["content"]
+    context = json.loads(content[0]["text"] if visual else content)
+    assert context["source_type"] == "pdf"
+    assert context["origin_metadata"]["selected_pages"] == [1, 2]
+    assert "only provided pages" in kwargs["messages"][0]["content"]
+    if visual:
+        assert len(content) == 3
+        assert content[1]["image_url"]["url"] == prepared.image_inputs[0]
+        assert "base64" not in content[0]["text"]
+    await service.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["invalid", "timeout"])
+async def test_v2_pdf_provider_failure(v2_boundary, prepared_input, failure):
+    from openai import APITimeoutError
+    import httpx2
+    prepared_input.source_type = SourceType.pdf
+    client, _ = v2_boundary
+    if failure == "timeout":
+        client.chat.completions.parse.side_effect = APITimeoutError(request=httpx2.Request("POST", "https://test.invalid"))
+    else:
+        client.chat.completions.parse.return_value = completion(None)
+    service = AIService()
+    with pytest.raises(AIProviderTimeoutError if failure == "timeout" else AIResponseError):
+        await service.analyze_source(prepared_input)
+    await service.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["timeout", "invalid"])
 async def test_v2_image_errors_remain_controlled(v2_boundary, prepared_input, failure):
     from openai import APITimeoutError
