@@ -1,4 +1,4 @@
-import { $, el, section, empty } from './dom.js';
+import { $, el, section, empty, reportSummary } from './dom.js';
 import { metrics } from './analysis.js';
 import { state } from './state.js';
 
@@ -21,13 +21,27 @@ export function renderCompare(actions) {
     $('compare-count').textContent = `Выбрано: ${state.compareSelection.size} из 5`;
     const root = $('comparison-result');
     root.replaceChildren();
+    root.setAttribute('aria-busy', String(state.loading.has('compare')));
     if (!state.comparisonResult) {
-        root.append(empty('Выберите от 2 до 5 конкурентов для сравнения', 'Для каждого нужен сохранённый сводный анализ. Новые AI-вызовы выполняются только по вашему действию.'));
+        const count = state.compareSelection.size;
+        const error = $('compare-error').textContent;
+        const status = state.loading.has('compare')
+            ? empty('Сравнение выполняется', 'Объединяем сохранённые сводные анализы. Дождитесь результата.')
+            : error ? empty('Сравнение не завершено', 'Выбор сохранён. Выполните рекомендации выше и повторите сравнение.')
+            : count >= 2 ? empty('Готово к сравнению', 'Нажмите «Сравнить выбранных», чтобы получить результат по сохранённым сводным анализам.')
+            : empty(count === 1 ? 'Выберите ещё одного конкурента' : 'Выберите от 2 до 5 конкурентов для сравнения', 'Для каждого нужен сохранённый сводный анализ. Сравнение запускается только кнопкой «Сравнить выбранных».');
+        status.classList.add('comparison-state');
+        status.setAttribute('role', 'status');
+        root.append(status);
         return;
     }
     const result = state.comparisonResult;
-    root.append(section('Ключевые выводы сравнения', result.executive_summary));
+    root.append(el('p', `Сравнение конкурентов · ${result.competitors.length} профиля`, 'mode-badge'),
+        reportSummary('Ключевые выводы сравнения', result.executive_summary));
     const wrapper = el('div', null, 'table-scroll');
+    wrapper.tabIndex = 0;
+    wrapper.setAttribute('role', 'region');
+    wrapper.setAttribute('aria-label', 'Матрица сравнения; прокрутите для просмотра всех критериев');
     const table = el('table');
     table.append(el('caption', 'Матрица общих критериев · оценки 0–10'));
     const criteria = Object.keys(metrics).slice(0, 4);

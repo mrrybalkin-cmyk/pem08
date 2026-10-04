@@ -1,4 +1,4 @@
-import { $, el, button, safeUrl, link, date, empty } from './dom.js';
+import { $, el, button, safeUrl, link, date, empty, disclosure } from './dom.js';
 import { state, currentSnapshot, currentAnalyses } from './state.js';
 import { idPath } from './api.js';
 import { renderAnalysis } from './analysis.js';
@@ -40,7 +40,7 @@ export function render(actions) {
         card.append(el('span', sourceLabels[source.source_type], `badge source-type source-type-${source.source_type}`), el('strong', source.label),
             el('small', source.original_filename || safeUrl(source.url)?.hostname || 'Ручной ввод', 'muted'),
             el('small', date(currentSnapshot(detail)?.captured_at || source.created_at), 'muted'),
-            el('small', busy ? 'Обрабатывается…' : detail ? currentAnalyses(detail).length ? 'Проанализирован' : 'Требуется анализ' : detail === null ? 'Состояние недоступно · выберите источник для повтора' : 'Загрузка состояния…', 'source-status'));
+            el('small', busy ? 'Обрабатывается…' : detail ? currentAnalyses(detail).length ? 'Проанализирован' : 'Требуется анализ' : detail === null ? 'Состояние недоступно · выберите источник для повтора' : 'Загрузка состояния…', `source-status ${busy ? 'status-busy' : detail && currentAnalyses(detail).length ? 'status-ready' : detail ? 'status-pending' : ''}`));
         $('source-list').append(card);
     }
     renderPreview(actions);
@@ -86,6 +86,6 @@ function renderPreview(actions) {
         if (meta.partial_analysis) root.append(el('p', 'Частичный анализ PDF: использованы выбранные страницы.', 'notice'));
     }
     if (meta.text_truncated) root.append(el('p', 'Текст ограничен при подготовке snapshot. Учитывайте ограничения анализа.', 'notice'));
-    if (snapshot.extracted_text) root.append(el('pre', snapshot.extracted_text, 'text-preview'));
+    if (snapshot.extracted_text) root.append(disclosure('Текст источника', el('pre', snapshot.extracted_text, 'text-preview'), !matchMedia('(max-width: 767px)').matches));
     else if (source.source_type !== 'image') root.append(el('p', 'Извлечённый текст отсутствует.', 'muted'));
 }

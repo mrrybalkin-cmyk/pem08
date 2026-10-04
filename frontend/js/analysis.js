@@ -1,4 +1,4 @@
-import { $, el, section, empty, button, date } from './dom.js';
+import { $, el, section, empty, button, date, disclosure, reportSummary } from './dom.js';
 import { state, currentAnalyses } from './state.js';
 
 export const metrics = {
@@ -26,7 +26,14 @@ export function renderAnalysis(actions) {
         return;
     }
     const result = analysis.result_json;
-    root.append(el('h2', state.analysisContext), el('p', `${analysis.analysis_type === 'aggregate' ? 'Сводный анализ' : 'Анализ источника'} · ${date(analysis.created_at)}`, 'muted'));
+    const aggregate = analysis.analysis_type === 'aggregate';
+    const context = el('div', null, `report-context ${aggregate ? 'report-context--aggregate' : 'report-context--source'}`);
+    context.append(el('p', aggregate ? 'Сводный анализ конкурента' : 'Анализ отдельного источника', 'mode-badge'),
+        el('h2', state.analysisContext),
+        el('p', `Конкурент: ${state.activeCompetitorDetail?.name || 'не выбран'}`, 'report-subtitle'),
+        el('p', `Сохранённый результат · ${date(analysis.created_at)}`, 'muted'));
+    if (aggregate) context.append(el('p', 'Объединяет анализы источников на момент создания. Покрытие и оговорки — во вкладке «Ограничения».', 'muted'));
+    root.append(context);
     const history = state.analysisMode === 'aggregate' ? state.analysisHistory.filter(a => a.analysis_type === 'aggregate') : (state.activeSourceDetail?.analyses || []);
     const select = el('select');
     select.id = 'analysis-history';
@@ -42,11 +49,7 @@ export function renderAnalysis(actions) {
     if (analysis.analysis_type === 'source' && !currentAnalyses(state.activeSourceDetail).some(a => a.id === analysis.id)) {
         root.append(el('p', 'Исторический результат — не анализ текущего snapshot.', 'notice'));
     }
-    const summary = section('Ключевые выводы', result.executive_summary);
-    summary.classList.add('summary');
-    summary.append(section('Позиционирование', result.positioning), section('Целевая аудитория', result.target_audience),
-        section('Ценностные предложения', result.value_propositions));
-    root.append(summary);
+    root.append(reportSummary('Ключевые выводы', result.executive_summary));
     const scores = el('section', null, 'scorecard');
     scores.setAttribute('aria-label', 'Оценки');
     for (const [key, label] of Object.entries(metrics)) {
@@ -57,7 +60,8 @@ export function renderAnalysis(actions) {
         meter.max = 10;
         meter.value = metric.score;
         meter.setAttribute('aria-label', label);
-        card.append(el('h3', label), el('strong', `${metric.score}/10`), meter, el('p', metric.rationale));
+        card.append(el('h3', label), el('strong', `${metric.score}/10`), meter,
+            disclosure('Обоснование', el('p', metric.rationale, 'prose')));
         scores.append(card);
     }
     root.append(scores);
@@ -70,7 +74,13 @@ export function renderAnalysis(actions) {
     }
     root.append(tabs);
     const body = el('div', null, 'analysis-body');
-    if (state.analysisTab === 'overview') for (const [key, label] of Object.entries(overview)) body.append(section(label, result[key]));
+    if (state.analysisTab === 'overview') for (const [key, label] of Object.entries(overview)) {
+        const content = section(label, result[key]);
+        if (['differentiators', 'marketing_messages'].includes(key)) {
+            content.firstChild.remove();
+            body.append(disclosure(label, content, !matchMedia('(max-width: 767px)').matches));
+        } else body.append(content);
+    }
     if (state.analysisTab === 'actions') body.append(section('Возможности', result.opportunities), section('Рекомендуемые действия', result.recommended_actions));
     if (state.analysisTab === 'limitations') body.append(section('Ограничения', result.limitations));
     if (state.analysisTab === 'evidence') {

@@ -48,3 +48,22 @@ export function empty(title, detail) {
     node.append(el('h3', title), el('p', detail));
     return node;
 }
+
+// Native disclosures retain every word and support keyboard interaction.
+export function disclosure(title, content, open = false) {
+    const node = el('details', null, 'disclosure');
+    node.open = open;
+    node.append(el('summary', title), content);
+    return node;
+}
+
+export function reportSummary(title, value) {
+    const node = el('section', null, 'result-section summary');
+    node.append(el('h3', title));
+    // Paragraphs improve scanning without summarizing or changing model text.
+    const sentences = String(value).split(/(?<=[.!?])\s+(?=[А-ЯЁA-Z])/u);
+    for (let i = 0; i < sentences.length; i += 2) {
+        node.append(el('p', sentences.slice(i, i + 2).join(' '), 'prose'));
+    }
+    return node;
+}

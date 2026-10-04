@@ -230,6 +230,10 @@ def run_browser(origin, png, captures):
         expect(page.locator('#source-preview pre')).to_have_text(PAYLOAD)
         assert page.get_by_role('button', name='Обновить страницу', exact=True).count() == 0
         expect(page.locator('.scorecard')).to_contain_text('6/10')
+        expect(page.locator('.report-context .mode-badge')).to_have_text('Анализ отдельного источника')
+        expect(page.locator('.report-subtitle')).to_contain_text(PAYLOAD)
+        page.locator('.scorecard details summary').first.focus()
+        page.keyboard.press('Enter')
         expect(page.locator('.scorecard .score p').first).to_be_visible()
         expect(page.locator('.scorecard .score p').first).to_contain_text('Наблюдаемое основание.')
         page.get_by_role('button', name='Доказательства', exact=True).click()
@@ -246,6 +250,7 @@ def run_browser(origin, png, captures):
         page.locator('#aggregate').click()
         settle()
         expect(page.locator('#analysis-content h2')).to_have_text('Сводный анализ')
+        expect(page.locator('.report-context .mode-badge')).to_have_text('Сводный анализ конкурента')
         aggregate_calls = sum('/aggregate-analysis' in url for _, url, _ in requests)
         page.locator('#latest-aggregate').click()
         assert sum('/aggregate-analysis' in url for _, url, _ in requests) == aggregate_calls
@@ -303,9 +308,30 @@ def run_browser(origin, png, captures):
         expect(page.locator('#compare-submit')).to_be_disabled()
         page.locator('#compare-choices input').nth(0).check()
         expect(page.locator('#compare-submit')).to_be_disabled()
+        expect(page.locator('#comparison-result')).to_contain_text('Выберите ещё одного конкурента')
         page.locator('#compare-choices input').nth(1).check()
+        expect(page.locator('#comparison-result')).to_contain_text('Готово к сравнению')
+        expect(page.locator('#comparison-result')).not_to_contain_text('Выберите от 2 до 5')
+        comparison_url = origin + '/api/v2/comparisons'
+        before_comparison = sum(url == comparison_url for _, url, _ in requests)
+        assert before_comparison == 0, 'Selecting competitors must never call AI'
+        pending_comparison = []
+        def hold_comparison(route):
+            pending_comparison.append(route)
+        page.route(comparison_url, hold_comparison)
         page.locator('#compare-submit').click()
+        expect(page.locator('#comparison-result')).to_contain_text('Сравнение выполняется')
+        expect(page.locator('#comparison-result')).to_have_attribute('aria-busy', 'true')
+        expect(page.locator('#compare-submit')).to_be_disabled()
+        assert all(input.is_disabled() for input in page.locator('#compare-choices input').all())
+        page.locator('#compare-submit').evaluate('button => button.click()')
+        page.wait_for_timeout(100)
+        assert len(pending_comparison) == 1, 'Duplicate comparison submit'
+        pending_comparison[0].continue_()
+        page.unroute(comparison_url, hold_comparison)
         settle()
+        expect(page.locator('#comparison-result > .mode-badge')).to_contain_text('Сравнение конкурентов')
+        expect(page.locator('#comparison-result')).not_to_contain_text('Готово к сравнению')
         expect(page.locator('#comparison-result table')).to_contain_text('Сила призыва к действию')
         expect(page.locator('#comparison-result')).to_contain_text('Ограничения сравнения')
         expect(page.locator('#comparison-result')).to_contain_text(PAYLOAD)
@@ -321,6 +347,8 @@ def run_browser(origin, png, captures):
         page.route(comparison_url, missing_aggregate)
         page.locator('#compare-submit').click()
         expect(page.locator('#compare-error')).to_contain_text('сначала нужен сводный анализ')
+        expect(page.locator('#comparison-result')).to_contain_text('Сравнение не завершено')
+        expect(page.locator('#compare-choices input:checked')).to_have_count(2)
         expect(page.locator('#compare-error')).not_to_contain_text('анализ текущего snapshot')
         expect(page.locator('#compare-submit')).to_be_enabled()
         assert page.locator('#compare-dialog').is_visible()
@@ -445,6 +473,15 @@ def run_browser(origin, png, captures):
                 boxes = [page.locator('#' + pane).bounding_box() for pane in ['competitors-pane', 'sources-pane', 'analysis-pane']]
                 assert boxes[0]['width'] == 260 and boxes[1]['width'] == 370
                 assert boxes[0]['x'] < boxes[1]['x'] < boxes[2]['x']
+            if label == 'mobile':
+                page.get_by_role('link', name='Анализ', exact=True).click()
+                expect(page.locator('#analysis-pane h2').first).to_be_visible()
+                # Native score disclosures remain readable and keyboard operable.
+                page.locator('.scorecard details summary').first.focus()
+                page.keyboard.press('Enter')
+                expect(page.locator('.scorecard details p').first).to_be_visible()
+                page.keyboard.press('Enter')
+                expect(page.locator('.scorecard details p').first).not_to_be_visible()
             page.locator('#open-compare').click()
             box = page.locator('#compare-dialog').bounding_box()
             assert box['x'] >= 0 and box['x'] + box['width'] <= width + 1 and box['height'] <= height, (label, box)
@@ -486,6 +523,8 @@ def run_browser(origin, png, captures):
             page.locator('#compare-choices input').nth(index).check()
         expect(page.locator('#compare-choices input').nth(5)).to_be_disabled()
         expect(page.locator('#compare-submit')).to_be_enabled()
+        expect(page.locator('#compare-count')).to_have_text('Выбрано: 5 из 5')
+        expect(page.locator('#comparison-result')).to_contain_text('Готово к сравнению')
         page.locator('#close-compare').click()
 
         assert any(method == 'POST' and '/sources/file' in url and 'multipart/form-data; boundary=' in ctype for method, url, ctype in requests)

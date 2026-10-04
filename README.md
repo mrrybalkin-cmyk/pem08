@@ -31,6 +31,8 @@ python run.py
 - «Сводный анализ» объединяет последние analyses текущих snapshots конкурента; `analysis_type=aggregate`, `snapshot_id=null`. Старый сводный результат можно открыть без нового AI-запроса.
 - «Сравнить» принимает 2–5 разных конкурентов с уже сохранённым сводным анализом; UI показывает одинаковые критерии, strengths/gaps и limitations. Скрытого создания aggregate и вычисления winner нет.
 - Executive summary, scorecard с rationale, overview, evidence/provenance, actions и limitations показываются безопасным plain text. История analyses доступна в workspace.
+- Режим и конкурент указаны над отчётом: анализ отдельного источника или сводный анализ конкурента. Ключевые выводы отделены от подробного обзора; обоснования оценок раскрываются кнопкой «Обоснование». На mobile вторичные секции и текст источника раскрываются по запросу, переходы «Конкуренты / Источники / Анализ» доступны сверху.
+- В сравнении состояния выбора, готовности, выполнения и ошибки различимы; ошибка сохраняет выбор для повтора. Только «Сравнить выбранных» запускает новый запрос. История сохранённых comparisons пока не доступна в UI.
 
 ## Persistence и артефакты
 
@@ -80,5 +82,7 @@ python -m compileall -q backend tests
 ```
 
 Все acceptance/smoke проверки offline, с временными SQLite/uploads/screenshots; production `data/` не используется. AI заменён детерминированными fakes; browser UI capture fake, отдельный local Chromium smoke проверяет реальный capture. JS syntax при доступном Node: `Get-ChildItem frontend/js/*.js | ForEach-Object { node --check $_.FullName }` (Node не runtime dependency).
+
+Отдельная визуальная проверка настоящих локальных данных: `python -m tests.product_visual_acceptance final`. Она требует существующих Anthropic/OpenAI profiles, открывает SQLite в read-only режиме, запрещает HTTP mutations и внешние запросы, не запускает AI. Сохранённый comparison берётся из SQLite и рендерится локально для проверки presentation; API истории comparisons отсутствует. Screenshots и JSON audit: `.pytest-temp/product-review/final`. Для сравнения с текущим commit: `python -m tests.product_visual_acceptance baseline`. Если запускаете pytest после capture, используйте `--basetemp=.pytest-temp/regression`, чтобы сохранить screenshots.
 
 Полный cutover inventory и результаты: [docs/STAGE9_VERIFICATION.md](docs/STAGE9_VERIFICATION.md). Спецификация: [PEM08_V2_SPEC.md](PEM08_V2_SPEC.md); исторический поэтапный план: [docs/V2_MIGRATION_PLAN.md](docs/V2_MIGRATION_PLAN.md).

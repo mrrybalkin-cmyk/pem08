@@ -11,6 +11,11 @@
 </head>
 <body>
     <a class="skip-link" href="#analysis-pane">К результатам анализа</a>
+    <nav class="mobile-navigation" aria-label="Разделы рабочего пространства">
+        <a href="#competitors-pane">Конкуренты</a>
+        <a href="#sources-pane">Источники</a>
+        <a href="#analysis-pane">Анализ</a>
+    </nav>
 
     <div class="workspace" id="workspace">
         <aside class="pane competitors-pane" aria-labelledby="product-title" id="competitors-pane">
@@ -70,7 +75,7 @@
                 <div class="analysis-heading">
                     <p class="eyebrow">Intelligence report</p>
                     <h2>Анализ и доказательства</h2>
-                    <p class="muted">Проверяйте выводы, историю анализа и рекомендации по выбранному источнику.</p>
+                    <p class="muted">Откройте источник, изучите сводный результат или сравните конкурентов.</p>
                 </div>
                 <div class="actions analysis-actions">
                     <button id="aggregate" type="button" disabled>Сводный анализ</button>
@@ -114,7 +119,7 @@
         </header>
         <form id="compare-form">
             <div id="compare-choices"></div>
-            <p id="compare-count" class="muted"></p>
+            <p id="compare-count" class="muted" aria-live="polite"></p>
             <p id="compare-error" class="error" role="alert"></p>
             <button id="compare-submit" class="primary" type="submit" disabled>Сравнить выбранных</button>
         </form>
