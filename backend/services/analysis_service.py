@@ -92,14 +92,23 @@ class AnalysisService:
         prepared = await _offload(lambda: prepare_aggregate(db, competitor_id))
         model_id = settings.ai_model
         start = perf_counter()
-        result = validated_result(await ai_service.aggregate_competitor(prepared), CompetitorAnalysis)
+        ai_service.reset_token_usage()
+        result = validated_result(
+            await ai_service.aggregate_competitor(prepared),
+            CompetitorAnalysis,
+        )
+        input_tokens, output_tokens = ai_service.token_usage
         cancelled = Event()
 
         def persist():
             try:
                 row = analyses.create_analysis(
                     db, competitor_id=competitor_id, snapshot_id=None, analysis_type="aggregate",
-                    model_id=model_id, prompt_version=AGGREGATE_PROMPT_VERSION, result=result,
+                    model_id=model_id,
+                    prompt_version=AGGREGATE_PROMPT_VERSION,
+                    result=result,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
                     duration_ms=round((perf_counter() - start) * 1000),
                 )
                 response = AnalysisResponse.model_validate(row)

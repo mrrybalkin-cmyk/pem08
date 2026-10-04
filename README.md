@@ -46,7 +46,7 @@ Preview изображения/URL screenshot выдаётся только че
 
 | Параметры | Назначение |
 |---|---|
-| APP_ENV, APP_HOST, APP_PORT | `development` включает reload; другое значение отключает reload. По умолчанию 127.0.0.1:8000. API_HOST/API_PORT поддерживаются как необязательные aliases; предпочтительны APP_* |
+| APP_ENV, APP_HOST, APP_PORT | `development` включает Uvicorn reload на non-Windows системах; на Windows reload отключён для совместимости Playwright с subprocess. Любое другое значение APP_ENV также отключает reload. По умолчанию 127.0.0.1:8000. API_HOST/API_PORT поддерживаются как необязательные aliases; предпочтительны APP_* |
 | AI_PROVIDER, AI_API_KEY, AI_BASE_URL, AI_MODEL | Провайдер/ключ/base URL/идентификатор модели; defaults в `.env.example`, доступность зависит от провайдера |
 | AI_REASONING_EFFORT, AI_TIMEOUT_SECONDS | Reasoning effort; пустое значение не отправляется. Timeout в секундах |
 | DATABASE_URL, UPLOAD_DIR, SCREENSHOT_DIR | SQLite и каталоги артефактов; по умолчанию `data/` |

@@ -224,7 +224,9 @@ class IngestionService:
         prepared, competitor_id, snapshot_id = await _offload(lambda: _load_prepared(db, source_id, snapshot_id))
         model_id = settings.ai_model
         start = perf_counter()
+        ai_service.reset_token_usage()
         result = await ai_service.analyze_source(prepared)
+        input_tokens, output_tokens = ai_service.token_usage
         if not isinstance(result, CompetitorAnalysis):
             raise AIResponseError("Missing validated CompetitorAnalysis")
         try:
@@ -245,7 +247,11 @@ class IngestionService:
                 analyses.create_analysis(
                     db, competitor_id=competitor_id, snapshot_id=snapshot_id,
                     analysis_type="source", model_id=model_id,
-                    prompt_version=ANALYSIS_PROMPT_VERSION, result=result, duration_ms=duration_ms,
+                    prompt_version=ANALYSIS_PROMPT_VERSION,
+                    result=result,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    duration_ms=duration_ms,
                 )
                 response = source_detail(db, source_id)
                 db.commit()

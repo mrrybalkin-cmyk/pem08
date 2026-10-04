@@ -1,6 +1,7 @@
 """Lazy async structured source, aggregate and comparison provider boundary."""
 
 import base64
+from contextvars import ContextVar
 
 from openai import (
     APIError, APITimeoutError, AsyncOpenAI,
@@ -47,9 +48,22 @@ def _require_complete_output(value: BaseModel) -> None:
                     _require_complete_output(item)
 
 
+_TOKEN_USAGE: ContextVar[tuple[int | None, int | None]] = ContextVar(
+    "pem08_ai_token_usage",
+    default=(None, None),
+)
+
+
 class AIService:
     def __init__(self):
         self._client: AsyncOpenAI | None = None
+
+    @property
+    def token_usage(self) -> tuple[int | None, int | None]:
+        return _TOKEN_USAGE.get()
+
+    def reset_token_usage(self) -> None:
+        _TOKEN_USAGE.set((None, None))
 
     @property
     def client(self) -> AsyncOpenAI:
@@ -87,6 +101,7 @@ class AIService:
         return validate_comparison_participants(result, payload)
 
     async def _structured_request(self, messages: list[dict], response_model: type[BaseModel]):
+        self.reset_token_usage()
         options = {}
         if settings.ai_reasoning_effort.strip():
             options["reasoning_effort"] = settings.ai_reasoning_effort.strip()
@@ -103,6 +118,23 @@ class AIService:
             raise AIProviderError("AI provider request failed") from exc
         except (ValidationError, ValueError, LengthFinishReasonError, ContentFilterFinishReasonError) as exc:
             raise AIResponseError("Invalid or incomplete structured AI response") from exc
+
+        usage = getattr(completion, "usage", None)
+        prompt_tokens = (
+            getattr(usage, "prompt_tokens", None)
+            if usage is not None
+            else None
+        )
+        completion_tokens = (
+            getattr(usage, "completion_tokens", None)
+            if usage is not None
+            else None
+        )
+
+        _TOKEN_USAGE.set((
+            prompt_tokens if isinstance(prompt_tokens, int) else None,
+            completion_tokens if isinstance(completion_tokens, int) else None,
+        ))
 
         if len(completion.choices) != 1:
             raise AIResponseError("Expected one structured AI response")
