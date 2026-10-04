@@ -3,72 +3,116 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark">
     <title>Competitor Intelligence — аналитическое пространство</title>
     <link rel="icon" href="data:,">
     <link rel="stylesheet" href="/static/workspace.css">
     <script type="module" src="/static/js/app.js"></script>
 </head>
 <body>
+    <a class="skip-link" href="#analysis-pane">К результатам анализа</a>
+
     <div class="workspace" id="workspace">
         <aside class="pane competitors-pane" aria-labelledby="product-title" id="competitors-pane">
-            <header class="pane-header">
-                <p class="eyebrow">Аналитическое пространство</p>
-                <h1 id="product-title">Competitor Intelligence</h1>
-                <button id="new-competitor" class="primary" type="button">+ Конкурент</button>
-                <button id="retry-load" type="button">Обновить список</button>
+            <header class="pane-header pane-header--brand">
+                <div class="brand-lockup">
+                    <div class="brand-mark" aria-hidden="true"></div>
+                    <div>
+                        <p class="eyebrow">Market intelligence</p>
+                        <h1 id="product-title">Competitor Intelligence</h1>
+                        <p class="product-copy">Источники, доказательства и сравнительный анализ в одном рабочем пространстве.</p>
+                    </div>
+                </div>
+                <div class="header-actions">
+                    <button id="new-competitor" class="primary" type="button">Добавить конкурента</button>
+                    <button id="retry-load" class="quiet" type="button">Обновить список</button>
+                </div>
             </header>
-            <p id="initial-loading" role="status" hidden>Загрузка конкурентов…</p>
+
+            <div class="section-label">
+                <span>Конкуренты</span>
+                <span class="section-label__hint">Рабочий список</span>
+            </div>
+            <p id="initial-loading" class="inline-status" role="status" hidden>Загрузка конкурентов…</p>
             <div id="competitor-list" class="card-list"></div>
         </aside>
+
         <section class="pane sources-pane" id="sources-pane" aria-labelledby="competitor-name">
-            <header class="pane-header">
-                <p class="eyebrow">Источники</p>
-                <h2 id="competitor-name">Источники</h2>
-                <p id="competitor-description" class="muted"></p>
-                <div id="competitor-website"></div>
-                <p id="competitor-notes" class="prose muted"></p>
-                <div class="actions">
-                    <button id="edit-competitor" type="button" disabled>Изменить</button>
-                    <button id="delete-competitor" class="danger" type="button" disabled>Удалить конкурента</button>
+            <header class="pane-header pane-header--context">
+                <div class="header-kicker">
+                    <p class="eyebrow">Профиль конкурента</p>
+                    <span class="context-dot" aria-hidden="true"></span>
                 </div>
-                <button id="add-source" class="primary" type="button" disabled>Добавить источник</button>
+                <h2 id="competitor-name">Источники</h2>
+                <p id="competitor-description" class="context-copy muted"></p>
+                <div id="competitor-website" class="website-slot"></div>
+                <p id="competitor-notes" class="prose muted"></p>
+
+                <div class="actions compact-actions">
+                    <button id="edit-competitor" type="button" disabled>Изменить</button>
+                    <button id="delete-competitor" class="danger" type="button" disabled>Удалить</button>
+                </div>
+
+                <button id="add-source" class="primary full-width" type="button" disabled>Добавить источник</button>
             </header>
+
+            <div class="section-label">
+                <span>Источники</span>
+                <span class="section-label__hint">Text · Image · PDF · URL</span>
+            </div>
             <div id="source-list" class="card-list"></div>
+
             <section id="source-preview" class="preview" aria-label="Предпросмотр источника"></section>
         </section>
+
         <main class="pane analysis-pane" id="analysis-pane" aria-label="Анализ">
-            <header class="pane-header">
-                <p class="eyebrow">Анализ</p>
-                <div class="actions">
+            <header class="pane-header analysis-toolbar">
+                <div class="analysis-heading">
+                    <p class="eyebrow">Intelligence report</p>
+                    <h2>Анализ и доказательства</h2>
+                    <p class="muted">Проверяйте выводы, историю анализа и рекомендации по выбранному источнику.</p>
+                </div>
+                <div class="actions analysis-actions">
                     <button id="aggregate" type="button" disabled>Сводный анализ</button>
-                    <button id="latest-aggregate" type="button" disabled>Последний сводный результат</button>
+                    <button id="latest-aggregate" type="button" disabled>Последний сводный</button>
                     <button id="open-compare" class="primary" type="button">Сравнить</button>
                 </div>
-                <p id="workspace-error" class="error" role="alert"></p>
-                <p id="workspace-status" class="muted" role="status" aria-live="polite"></p>
+                <div class="feedback-stack">
+                    <p id="workspace-error" class="error" role="alert"></p>
+                    <p id="workspace-status" class="inline-status muted" role="status" aria-live="polite"></p>
+                </div>
             </header>
-            <div id="analysis-content"></div>
+
+            <div id="analysis-content" class="analysis-content"></div>
         </main>
     </div>
+
     <dialog id="editor-dialog" aria-labelledby="editor-title">
         <form id="editor-form">
-            <h2 id="editor-title">Новый конкурент</h2>
+            <div class="dialog-heading">
+                <p class="eyebrow">Competitor profile</p>
+                <h2 id="editor-title">Новый конкурент</h2>
+            </div>
             <div id="editor-fields"></div>
             <p id="form-error" class="error" role="alert"></p>
-            <p id="form-status" role="status" aria-live="polite"></p>
+            <p id="form-status" class="inline-status" role="status" aria-live="polite"></p>
             <div class="actions dialog-actions">
                 <button id="form-cancel" type="button">Отмена</button>
                 <button id="form-submit" class="primary" type="submit">Сохранить</button>
             </div>
         </form>
     </dialog>
+
     <dialog id="compare-dialog" class="compare-dialog" aria-labelledby="compare-title">
         <header class="compare-header">
-            <h2 id="compare-title">Сравнение конкурентов</h2>
-            <button id="close-compare" type="button">Закрыть</button>
+            <div>
+                <p class="eyebrow">Comparison workspace</p>
+                <h2 id="compare-title">Сравнение конкурентов</h2>
+                <p class="muted">Выберите 2–5 конкурентов со сводным анализом.</p>
+            </div>
+            <button id="close-compare" class="quiet" type="button">Закрыть</button>
         </header>
         <form id="compare-form">
-            <p>Выберите от 2 до 5 конкурентов с сохранённым сводным анализом.</p>
             <div id="compare-choices"></div>
             <p id="compare-count" class="muted"></p>
             <p id="compare-error" class="error" role="alert"></p>

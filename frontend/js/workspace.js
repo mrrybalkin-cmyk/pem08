@@ -37,7 +37,7 @@ export function render(actions) {
         const card = button('', () => actions.selectSource(source.id), false, `source-card ${source.id === state.activeSourceId ? 'active' : ''}`);
         card.setAttribute('aria-pressed', String(source.id === state.activeSourceId));
         const busy = state.loading.has(`source:${source.id}`);
-        card.append(el('span', `${{ text: '✎', image: '▧', pdf: '▤', url: '↗' }[source.source_type]} ${sourceLabels[source.source_type]}`, 'badge'), el('strong', source.label),
+        card.append(el('span', sourceLabels[source.source_type], `badge source-type source-type-${source.source_type}`), el('strong', source.label),
             el('small', source.original_filename || safeUrl(source.url)?.hostname || 'Ручной ввод', 'muted'),
             el('small', date(currentSnapshot(detail)?.captured_at || source.created_at), 'muted'),
             el('small', busy ? 'Обрабатывается…' : detail ? currentAnalyses(detail).length ? 'Проанализирован' : 'Требуется анализ' : detail === null ? 'Состояние недоступно · выберите источник для повтора' : 'Загрузка состояния…', 'source-status'));
