@@ -160,11 +160,10 @@ def test_write_failure_rolls_back(competitor_client, monkeypatch, method, operat
             patch.setattr(Session, "commit", fail_commit)
         else:
             patch.setattr(repository, operation, fail_repository)
-        with pytest.raises(RuntimeError, match="Injected"):
-            if method == "delete":
-                client.delete(item_url)
-            else:
-                client.request(method, URL if method == "post" else item_url, json={"name": "Changed"})
+        response = client.delete(item_url) if method == "delete" else client.request(
+            method, URL if method == "post" else item_url, json={"name": "Changed"})
+        assert response.status_code == 500
+        assert response.json()["error"]["code"] == "INTERNAL_ERROR"
         rollback_calls.assert_called_once_with()
     assert client.get(item_url).json() == {**created, "sources": [], "latest_analysis": None}
     assert len(client.get(URL).json()) == 1
@@ -177,7 +176,8 @@ def test_openapi_models_and_routes(competitor_client):
     paths = schema["paths"]
     assert {"get", "post"} <= paths[URL].keys()
     assert {"get", "patch", "delete"} <= paths[f"{URL}/{{competitor_id}}"].keys()
-    assert {"/api/v2/health", "/health", "/analyze_text", "/analyze_image", "/parse_demo", "/history"} <= paths.keys()
+    assert "/api/v2/health" in paths
+    assert not {"/health", "/analyze_text", "/analyze_image", "/parse_demo", "/history"} & paths.keys()
     for path, method, model in [
         (URL, "post", "CompetitorCreate"),
         (f"{URL}/{{competitor_id}}", "patch", "CompetitorUpdate"),

@@ -11,7 +11,6 @@ def test_config_defaults_csv_and_paths(monkeypatch):
     assert settings.upload_dir == PROJECT_ROOT / "data/test-uploads"
     assert not settings.ai_configured
     assert settings.ai_base_url == "https://api.proxyapi.ru/v1"
-    assert settings.proxy_api_base_url == "https://api.proxyapi.ru/openai/v1"
 
 
 @pytest.mark.parametrize("field", ["max_image_mb", "max_pdf_mb", "max_text_chars", "browser_timeout_ms", "ai_timeout_seconds"])

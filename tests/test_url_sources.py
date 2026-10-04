@@ -49,6 +49,7 @@ def test_url_create_refresh_reanalyze_and_all_snapshot_cleanup(url_api):
     assert snapshot["secondary_screenshot_path"] is None
     prepared = api.boundary.await_args.args[0]
     assert prepared.source_type == "url"
+    assert prepared.text_context == "Visible website content"
     assert prepared.image_inputs[0].startswith("data:image/png;base64,")
     assert prepared.origin_metadata["captured_at"]
     assert "base64" not in str(snapshot["metadata_json"])

@@ -9,8 +9,6 @@ from fastapi import FastAPI
 from backend.config import settings
 from backend.database import Base, engine
 from backend.models import db as db_models  # noqa: F401
-from backend.services.openai_service import openai_service
-from backend.services.parser_service import parser_service
 from backend.services.ai_service import ai_service
 from backend.services.browser_service import browser_service
 
@@ -46,19 +44,11 @@ async def lifespan(app: FastAPI):
         app.state.database_ready = False
 
         try:
-            await parser_service.close()
+            await ai_service.close()
         finally:
             try:
-                await asyncio.to_thread(
-                    openai_service.close
-                )
+                await browser_service.close()
             finally:
-                try:
-                    await ai_service.close()
-                finally:
-                    try:
-                        await browser_service.close()
-                    finally:
-                        await asyncio.to_thread(engine.dispose)
+                await asyncio.to_thread(engine.dispose)
 
         logger.info("Application stopped")

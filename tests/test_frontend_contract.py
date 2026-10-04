@@ -1,4 +1,4 @@
-"""Stage 8 zero-build entry and safe rendering contract; legacy kept offline."""
+"""Stage 8 zero-build entry and safe rendering contract; legacy removed."""
 from pathlib import Path
 import re
 
@@ -40,10 +40,10 @@ def test_v2_modules_have_single_fetch_boundary_and_no_html_sinks():
     assert "noopener noreferrer" in (ROOT / 'frontend/js/dom.js').read_text()
 
 
-def test_legacy_assets_retained_unmodified_primary_entry_separate():
-    assert (ROOT / 'frontend/legacy-index.html').exists()
-    assert (ROOT / 'frontend/app.js').exists()
-    assert (ROOT / 'frontend/styles.css').exists()
+def test_legacy_assets_removed_after_cutover():
+    assert not (ROOT / 'frontend/legacy-index.html').exists()
+    assert not (ROOT / 'frontend/app.js').exists()
+    assert not (ROOT / 'frontend/styles.css').exists()
 
 
 def test_responsive_layout_contract():

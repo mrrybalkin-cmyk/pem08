@@ -277,8 +277,7 @@ def test_delete_failure_preserves_db_and_file(source_api, monkeypatch, target, f
         if target == "source":
             assert api.client.delete(f"/api/v2/sources/{source_id}").status_code == 500
         else:
-            with pytest.raises((SQLAlchemyError, OSError)):
-                api.client.delete(f"/api/v2/competitors/{api.competitor_id}")
+            assert api.client.delete(f"/api/v2/competitors/{api.competitor_id}").status_code == 500
     assert path.read_bytes() == before
     assert api.client.get(f"/api/v2/sources/{source_id}").json() == detail
 
@@ -365,8 +364,9 @@ def test_multiple_file_deletion_failure_restores_previous_file(source_api, monke
 
     with monkeypatch.context() as patch:
         patch.setattr(StorageService, "remove_reversibly", fail_second)
-        with pytest.raises(OSError):
-            api.client.delete(f"/api/v2/competitors/{api.competitor_id}")
+        response = api.client.delete(f"/api/v2/competitors/{api.competitor_id}")
+        assert response.status_code == 500
+        assert response.json()["error"]["code"] == "INTERNAL_ERROR"
     for detail in (first, second):
         assert (api.uploads / detail["source"]["storage_path"]).read_bytes() == image_bytes()
         assert api.client.get(f"/api/v2/sources/{detail['source']['id']}").status_code == 200

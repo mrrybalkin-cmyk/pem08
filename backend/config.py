@@ -4,6 +4,7 @@
 import logging
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -27,11 +28,10 @@ def setup_logging():
     
     # Уменьшаем логи от сторонних библиотек
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpx2").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("openai").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
-    logging.getLogger("selenium").setLevel(logging.WARNING)
-    logging.getLogger("WDM").setLevel(logging.WARNING)
     
     return logging.getLogger("competitor_monitor")
 
@@ -40,7 +40,7 @@ logger = setup_logging()
 
 
 class Settings(BaseSettings):
-    """Foundation v2 и отдельные настройки совместимости v1."""
+    """Configuration for the local v2 Web application."""
 
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env", env_file_encoding="utf-8",
@@ -72,24 +72,21 @@ class Settings(BaseSettings):
     cors_origins: str = "http://127.0.0.1:8000,http://localhost:8000"
     log_level: str = "INFO"
 
-    # Legacy v1: не смешиваем старый URL/model ID с настройками v2.
-    proxy_api_key: SecretStr = SecretStr("")
-    proxy_api_base_url: str = "https://api.proxyapi.ru/openai/v1"
-    openai_model: str = "gpt-4o-mini"
-    openai_vision_model: str = "gpt-4o-mini"
-    
-    # История
-    history_file: Path = PROJECT_ROOT / "history.json"
-    max_history_items: int = 10
-    
-    # Парсер
-    parser_timeout: int = 10
-    parser_user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    
-    @field_validator("upload_dir", "screenshot_dir", "history_file", mode="after")
+    @field_validator("upload_dir", "screenshot_dir", mode="after")
     @classmethod
     def resolve_path(cls, value: Path) -> Path:
         return (PROJECT_ROOT / value).resolve()
+
+    @field_validator("cors_origins")
+    @classmethod
+    def validate_origins(cls, value: str) -> str:
+        for origin in (item.strip() for item in value.split(",") if item.strip()):
+            parsed = urlsplit(origin)
+            if ("*" in origin or parsed.scheme not in {"http", "https"} or not parsed.hostname
+                    or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment):
+                raise ValueError("CORS_ORIGINS must contain explicit HTTP(S) origins")
+            _ = parsed.port
+        return value
 
     @field_validator("log_level")
     @classmethod

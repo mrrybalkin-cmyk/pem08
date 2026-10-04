@@ -34,7 +34,6 @@ with patch.object(DotEnvSettingsSource, "_read_env_files", return_value={}), \
     from backend.config import settings
     from fastapi.testclient import TestClient
     assert not settings.ai_configured
-    assert not settings.proxy_api_key.get_secret_value()
     print("IMPORT_OK")
     with TestClient(backend.main.app) as client:
         assert backend.main.app.state.started
@@ -51,23 +50,17 @@ with patch.object(DotEnvSettingsSource, "_read_env_files", return_value={}), \
     assert "IMPORT_OK" in result.stdout
 
 
-def test_health_and_legacy_routes_offline(app):
-    with patch("backend.services.openai_service.OpenAI", side_effect=AssertionError("Eager client")):
+def test_health_and_workspace_offline(app):
+    with patch("backend.services.ai_service.AsyncOpenAI", side_effect=AssertionError("Eager client")):
         with TestClient(app) as client:
             response = client.get("/api/v2/health")
             assert response.status_code == 200
             assert response.json() == {
-                "status": "ok", "version": "2.0.0",
-                "database": "ready", "browser": "not_initialized",
-                "ai_configured": False,
+                "status": "ok", "version": "2.0.0", "database": "ready",
+                "browser": "not_initialized", "ai_configured": False,
             }
-            for path in ("/", "/static/app.js", "/health", "/openapi.json", "/history"):
+            for path in ("/", "/static/js/app.js", "/openapi.json", "/docs", "/redoc"):
                 assert client.get(path).status_code == 200
-            response = client.post("/analyze_text", json={"text": "Offline example text"})
-            assert response.json()["success"] is False
-            assert "PROXY_API_KEY" in response.json()["error"]
-            paths = client.get("/openapi.json").json()["paths"]
-            assert {"/analyze_text", "/analyze_image", "/parse_demo", "/history", "/health"} <= paths.keys()
 
 
 def test_cors_allow_and_deny(app):
@@ -84,8 +77,7 @@ def test_configured_health_still_does_not_create_client(app, monkeypatch):
     from pydantic import SecretStr
     from backend.config import settings
     monkeypatch.setattr(settings, "ai_api_key", SecretStr("test-only-v2-marker"))
-    monkeypatch.setattr(settings, "proxy_api_key", SecretStr("test-only-v1-marker"))
-    with patch("backend.services.openai_service.OpenAI", side_effect=AssertionError("Eager client")):
+    with patch("backend.services.ai_service.AsyncOpenAI", side_effect=AssertionError("Eager client")):
         with TestClient(app) as client:
             response = client.get("/api/v2/health")
             assert response.status_code == 200

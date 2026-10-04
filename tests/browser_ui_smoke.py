@@ -34,12 +34,12 @@ def configure(runtime):
     DotEnvSettingsSource._read_env_files = lambda self: {}
     for key in list(os.environ):
         if key.startswith(('AI_', 'OPENAI_', 'PROXY_', 'APP_', 'API_', 'MAX_', 'BROWSER_')) or key in {
-            'DATABASE_URL', 'UPLOAD_DIR', 'SCREENSHOT_DIR', 'HISTORY_FILE', 'CORS_ORIGINS', 'LOG_LEVEL',
+            'DATABASE_URL', 'UPLOAD_DIR', 'SCREENSHOT_DIR', 'CORS_ORIGINS', 'LOG_LEVEL',
         }:
             os.environ.pop(key, None)
     os.environ.update(DATABASE_URL=f"sqlite:///{(runtime / 'app.db').as_posix()}",
                       UPLOAD_DIR=str(runtime / 'uploads'), SCREENSHOT_DIR=str(runtime / 'screenshots'),
-                      HISTORY_FILE=str(runtime / 'history.json'), LOG_LEVEL='ERROR')
+                      LOG_LEVEL='ERROR')
 
 
 def analysis_result():
@@ -230,6 +230,8 @@ def run_browser(origin, png, captures):
         expect(page.locator('#source-preview pre')).to_have_text(PAYLOAD)
         assert page.get_by_role('button', name='Обновить страницу', exact=True).count() == 0
         expect(page.locator('.scorecard')).to_contain_text('6/10')
+        expect(page.locator('.scorecard .score p').first).to_be_visible()
+        expect(page.locator('.scorecard .score p').first).to_contain_text('Наблюдаемое основание.')
         page.get_by_role('button', name='Доказательства', exact=True).click()
         expect(page.locator('.analysis-body')).to_contain_text(PAYLOAD)
         page.get_by_role('button', name='Действия', exact=True).click()

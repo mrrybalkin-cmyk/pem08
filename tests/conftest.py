@@ -33,7 +33,6 @@ for name in list(os.environ):
         "SCREENSHOT_DIR",
         "DATABASE_URL",
         "CORS_ORIGINS",
-        "HISTORY_FILE",
         "LOG_LEVEL",
     }:
         os.environ.pop(name, None)
@@ -44,9 +43,6 @@ os.environ["UPLOAD_DIR"] = str(
 )
 os.environ["SCREENSHOT_DIR"] = str(
     TEST_RUNTIME_ROOT / "screenshots"
-)
-os.environ["HISTORY_FILE"] = str(
-    TEST_RUNTIME_ROOT / "history.json"
 )
 os.environ["DATABASE_URL"] = (
     f"sqlite:///{(TEST_RUNTIME_ROOT / 'app.db').as_posix()}"

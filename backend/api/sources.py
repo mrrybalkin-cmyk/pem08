@@ -1,67 +1,21 @@
 """Stage 4 source routes; HTTP concerns only, no provider/filesystem workflow."""
 
 from fastapi import APIRouter, Depends, File, Form, Response, UploadFile
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.routing import APIRoute
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
+from backend.api.errors import V2Route, ERROR_RESPONSES
 from backend.config import settings
 from backend.database import get_db
-from backend.models.api import SourceDetailResponse, SourceErrorResponse, TextSourceCreate, UrlSourceCreate
-from backend.services.ai_service import AIConfigurationError, AIProviderError, AIProviderTimeoutError
+from backend.models.api import SourceDetailResponse, TextSourceCreate, UrlSourceCreate
 from backend.services.ingestion_service import ResourceNotFound, delete_source, ingestion_service, source_detail
-from backend.services.storage_service import ImageTooLarge, InvalidImage, StorageService, ScreenshotStorage
+from backend.services.storage_service import InvalidImage, StorageService, ScreenshotStorage
 from backend.repositories import sources as source_repository
-from backend.services.document_service import InvalidPDF, PDFTooLarge
-from backend.security.url_validation import InvalidURL
-from backend.services.browser_service import BrowserCaptureError, BrowserTimeoutError
-from backend.services.analysis_service import AnalysisDataNotReady
-
-
-class SourceRoute(APIRoute):
-    def get_route_handler(self):
-        handler = super().get_route_handler()
-
-        async def safe_handler(request):
-            try:
-                return await handler(request)
-            except AnalysisDataNotReady:
-                status, code, message = 400, "ANALYSIS_DATA_NOT_READY", "No usable analyses available for this operation"
-            except InvalidURL as exc:
-                status, code, message = 400, exc.code, str(exc)
-            except BrowserTimeoutError:
-                status, code, message = 504, "BROWSER_TIMEOUT", "Browser capture timed out"
-            except BrowserCaptureError:
-                status, code, message = 500, "BROWSER_ERROR", "Browser capture failed; upload a screenshot instead"
-            except ResourceNotFound:
-                status, code, message = 404, "NOT_FOUND", "Requested resource not found"
-            except PDFTooLarge:
-                status, code, message = 413, "PDF_TOO_LARGE", "PDF exceeds MAX_PDF_MB"
-            except InvalidPDF:
-                status, code, message = 400, "INVALID_PDF", "Only valid unencrypted PDF files are supported"
-            except ImageTooLarge:
-                status, code, message = 413, "IMAGE_TOO_LARGE", "Image exceeds MAX_IMAGE_MB"
-            except InvalidImage:
-                status, code, message = 400, "INVALID_IMAGE", "Only valid JPEG, PNG and WebP images are supported"
-            except RequestValidationError:
-                status, code, message = 422, "VALIDATION_ERROR", "Invalid source payload"
-            except AIConfigurationError:
-                status, code, message = 500, "AI_NOT_CONFIGURED", "Configure AI_API_KEY to analyze sources"
-            except AIProviderTimeoutError:
-                status, code, message = 504, "AI_TIMEOUT", "AI provider timed out"
-            except AIProviderError:
-                status, code, message = 502, "AI_PROVIDER_ERROR", "AI analysis failed"
-            except Exception:
-                status, code, message = 500, "INTERNAL_ERROR", "Source operation failed"
-            return JSONResponse(status_code=status, content={"error": {"code": code, "message": message, "details": None}})
-
-        return safe_handler
 
 
 router = APIRouter(
-    prefix="/api/v2", tags=["sources"], route_class=SourceRoute,
-    responses={status: {"model": SourceErrorResponse} for status in (400, 404, 413, 422, 500, 502, 504)},
+    prefix="/api/v2", tags=["sources"], route_class=V2Route,
+    responses=ERROR_RESPONSES,
 )
 
 

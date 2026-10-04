@@ -1,198 +1,84 @@
-# 🔍 Мониторинг конкурентов - AI Ассистент
+# Competitor Intelligence — PEM08 v2
 
-## v2 — Stage 1 Foundation
+Локальное аналитическое Web workspace: конкуренты → источники → доказательный анализ → сводный анализ → сравнение. FastAPI, статические ES modules без Node/build step, SQLAlchemy/SQLite, AsyncOpenAI, async Playwright и PyMuPDF.
 
-Stage 1 добавляет конфигурацию, lifespan и `GET /api/v2/health`.
-SQLite, Playwright, PDF, CRUD и AI pipeline v2 пока не реализованы.
-Существующий UI и v1 API сохранены; описание ниже относится к v1.
+## Установка и запуск (PowerShell)
 
-Команды Windows/PowerShell выполняются из корня проекта с активированным
-virtual environment Python 3.14 (либо используйте собственный путь к его Python):
+Проверенная среда: Python 3.14; прямые зависимости закреплены в requirements.txt.
 
 ```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m playwright install chromium
+Copy-Item .env.example .env
+# Заполните AI_API_KEY и параметры вашего OpenAI-compatible провайдера.
 python run.py
 ```
 
-Ключ для запуска и health не нужен. Шаблон конфигурации — `.env.example`;
-локальный `.env` игнорируется Git. Относительные пути upload/screenshot/history
-разрешаются от корня проекта. По умолчанию сервер слушает `127.0.0.1:8000`,
-CORS разрешает только origins из `CORS_ORIGINS` (CSV).
+Единственная команда запуска приложения: `python run.py`. Откройте http://127.0.0.1:8000. API: `/api/v2`, Swagger: `/docs`, ReDoc: `/redoc`, схема: `/openapi.json`, health: `/api/v2/health`.
 
-Health возвращает HTTP 200:
+Без ключа сервер и workspace запускаются, health честно сообщает `ai_configured=false`; новые AI-анализы недоступны. Наличие ключа не означает, что провайдер доступен или поддерживает выбранную модель/structured output/vision. Рабочий провайдер должен поддерживать `chat.completions.parse` с полными Pydantic schemas.
 
-```json
-{"status":"ok","version":"2.0.0","database":"not_initialized","browser":"not_initialized","ai_configured":false}
-```
+## Workflow
 
-`ai_configured` отражает только наличие непустого `AI_API_KEY` для v2,
-а не доступность провайдера. `AI_*` подготовлены по ТЗ для будущего pipeline.
-Сохранённые v1 AI endpoints используют отдельные `PROXY_API_KEY`,
-`PROXY_API_BASE_URL`, `OPENAI_MODEL`, `OPENAI_VISION_MODEL`; v2 URL/model IDs
-не подставляются в legacy запросы. Без legacy ключа возвращается явная ошибка
-в существующем v1 формате `success:false`. `AI_TIMEOUT_SECONDS` (default 60 секунд)
-применяется к legacy клиенту. `API_HOST/API_PORT` поддерживаются как старые aliases,
-приоритет имеют `APP_HOST/APP_PORT`.
+- Создайте конкурентов: название, сайт, ниша, заметки; редактирование и удаление доступны в UI.
+- Добавьте текст (10–30 000 символов), JPEG/PNG/WebP, PDF или HTTP(S) URL. Источник сохраняется в SQLite и автоматически анализируется.
+- Изображение анализируется визуально; PDF обрабатывается PyMuPDF: извлечённый текст и изображения выбранных страниц. Длинные PDF анализируются частично с явными limitations.
+- URL открывается Chromium через Playwright: итоговый URL, title, meta description, видимый текст и PNG screenshot сохраняются как snapshot. Длинный текст обрезается с limitations.
+- «Повторить анализ» использует текущий сохранённый snapshot и создаёт новый analysis; URL повторно не загружается.
+- «Обновить страницу» доступно только для URL: новый capture, новый snapshot, новый analysis. Предыдущие snapshots сохраняются.
+- «Сводный анализ» объединяет последние analyses текущих snapshots конкурента; `analysis_type=aggregate`, `snapshot_id=null`. Старый сводный результат можно открыть без нового AI-запроса.
+- «Сравнить» принимает 2–5 разных конкурентов с уже сохранённым сводным анализом; UI показывает одинаковые критерии, strengths/gaps и limitations. Скрытого создания aggregate и вычисления winner нет.
+- Executive summary, scorecard с rationale, overview, evidence/provenance, actions и limitations показываются безопасным plain text. История analyses доступна в workspace.
 
-Lifespan создаёт каталоги uploads/screenshots без сетевых запросов. AI client и
-Selenium executor создаются лениво, закрываются при shutdown и могут создаваться
-снова при следующем запуске. История не читается и не создаётся при импорте.
+## Persistence и артефакты
 
-Offline-проверки:
+SQLite (`DATABASE_URL`) хранит конкурентов, источники, snapshots, analyses и comparisons и сохраняет их после перезапуска. Оригинальные uploads и PNG screenshots лежат в отдельных каталогах. Сохраняйте резервную копию SQLite вместе с обоими каталогами при остановленном приложении. Историческое comparison остаётся после удаления конкурента; остальные связанные записи и принадлежащие им файлы удаляются.
 
-```powershell
-python -m compileall -q backend desktop run.py
-python -m pytest -q
-python -c "import backend.main; print('IMPORT_OK')"
-```
+Preview изображения/URL screenshot выдаётся только через DB-привязанный `/api/v2/sources/{source_id}/snapshots/{snapshot_id}/artifact`: UUID-файл, проверенный resolver, без клиентского filesystem path. PDF preview — метаданные, извлечённый текст и информация о страницах; inline PDF serving не используется.
 
-Тесты изолируют environment и `.env`, используют временные каталоги,
-блокируют сетевой I/O (кроме внутреннего Windows socketpair для asyncio),
-подменяют AI SDK и не запускают браузер. Для установки тестовых зависимостей:
+При AI failure уже сохранённые source/snapshot и артефакты остаются для retry. До успешного сохранения snapshot ошибки DB/ingestion убирают новые файлы. При неуспешном удалении DB rollback восстанавливает удалённые файлы; посторонние файлы не затрагиваются.
+
+## Конфигурация
+
+`.env.example` содержит действующие параметры. `.env` исключён из Git.
+
+| Параметры | Назначение |
+|---|---|
+| APP_ENV, APP_HOST, APP_PORT | `development` включает reload; другое значение отключает reload. По умолчанию 127.0.0.1:8000. API_HOST/API_PORT поддерживаются как необязательные aliases; предпочтительны APP_* |
+| AI_PROVIDER, AI_API_KEY, AI_BASE_URL, AI_MODEL | Провайдер/ключ/base URL/идентификатор модели; defaults в `.env.example`, доступность зависит от провайдера |
+| AI_REASONING_EFFORT, AI_TIMEOUT_SECONDS | Reasoning effort; пустое значение не отправляется. Timeout в секундах |
+| DATABASE_URL, UPLOAD_DIR, SCREENSHOT_DIR | SQLite и каталоги артефактов; по умолчанию `data/` |
+| MAX_IMAGE_MB, MAX_PDF_MB | Ограничения upload: 10 / 25 MiB |
+| MAX_TEXT_CHARS, MAX_WEB_TEXT_CHARS | Лимиты текста: 30 000 / 25 000 |
+| MAX_PDF_PAGES_ANALYZED | По умолчанию 8 выбранных страниц, включая начало/конец |
+| BROWSER_HEADLESS, BROWSER_TIMEOUT_MS | Chromium headless и timeout capture (20 000 ms) |
+| BROWSER_VIEWPORT_WIDTH, BROWSER_VIEWPORT_HEIGHT | Viewport capture 1440 × 1200 |
+| CORS_ORIGINS | Список точных HTTP(S) origins через запятую. Default только localhost; пустое значение отключает cross-origin доступ. Wildcard запрещён, credentials отключены |
+| LOG_LEVEL | DEBUG/INFO/WARNING/ERROR/CRITICAL |
+
+## Границы безопасности и ограничения
+
+Core предназначен для локальной работы доверенного пользователя: authentication отсутствует. APP_HOST по умолчанию loopback; публикация в общедоступной сети требует отдельной инфраструктуры доступа. CORS не заменяет authentication.
+
+URL policy блокирует private/loopback/link-local/metadata/multicast/reserved адреса, credentials и неожиданные schemes; redirects и subrequests повторно проверяются. Capture не выполняет login и не обходит CAPTCHA/paywall. Это ограниченный browser capture публичных страниц; сетевой egress control остаётся дополнительной инфраструктурной границей. AI вывод может быть неполным или ошибочным: evidence и limitations следует проверять.
+
+Все ошибки API используют HTTP statuses и `{"error":{"code":"...","message":"...","details":null}}`: 400 invalid operation, 404 missing resource, 413 oversized upload, 422 validation, 502 provider failure, 504 timeout, 500 internal failure. CORS preflight — стандартный протокол middleware, не JSON API response. Клиенту не выдаются исключения, secrets или пути. Сервер пишет method, шаблон route, status, duration и code; для unexpected failure — тип и stack frames без значения исключения, locals или request body. Access logging Uvicorn отключён, query/header/document/binary/AI payload не логируются.
+
+## Проверки
 
 ```powershell
 python -m pip install -r requirements-dev.txt
+python -m pip check
+python -m pytest -q
+python -m tests.stage9_acceptance
+python -m tests.browser_local_smoke
+python -m tests.browser_ui_smoke
+python -m tests.startup_smoke
+python -m compileall -q backend tests
 ```
 
-`requirements.txt` содержит только runtime dependencies;
-новое окружение внутри репозитория не требуется.
+Все acceptance/smoke проверки offline, с временными SQLite/uploads/screenshots; production `data/` не используется. AI заменён детерминированными fakes; browser UI capture fake, отдельный local Chromium smoke проверяет реальный capture. JS syntax при доступном Node: `Get-ChildItem frontend/js/*.js | ForEach-Object { node --check $_.FullName }` (Node не runtime dependency).
 
-Промежуточный контракт Stage 1 уточняет пример полного v2 из §10/§18 ТЗ:
-database/browser честно `not_initialized`, AI client не создаётся на startup.
-Это соответствует ограничению Stage 1; архитектурные документы не переписаны.
-
-MVP приложение для анализа конкурентной среды с поддержкой мультимодальности (текст и изображения).
-
-![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-green.svg)
-![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4o-purple.svg)
-
-## 📋 Описание
-
-Приложение позволяет:
-- **Анализировать текст конкурентов** — получать структурированную аналитику с сильными/слабыми сторонами, уникальными предложениями и рекомендациями
-- **Анализировать изображения** — баннеры, скриншоты сайтов, упаковки товаров с оценкой визуального стиля
-- **Парсить сайты** — автоматически извлекать и анализировать контент по URL
-- **Хранить историю** — последние 10 запросов сохраняются для быстрого доступа
-
-## 🚀 Быстрый старт
-
-### 1. Клонирование и установка зависимостей
-
-```bash
-# Клонируйте репозиторий
-cd competitor-monitor
-
-# Создайте виртуальное окружение
-python -m venv venv
-
-# Активируйте окружение
-# Windows:
-venv\Scripts\activate
-# Linux/Mac:
-source venv/bin/activate
-
-# Установите зависимости
-pip install -r requirements.txt
-```
-
-### 2. Настройка переменных окружения
-
-Создайте файл `.env` в корне проекта (используйте `.env.example` как шаблон):
-
-```env
-PROXY_API_KEY=your_proxy_api_key_here
-OPENAI_MODEL=gpt-4o-mini
-OPENAI_VISION_MODEL=gpt-4o-mini
-```
-
-### 3. Запуск приложения
-
-```bash
-# Запуск сервера
-python -m uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-Приложение будет доступно по адресу: http://localhost:8000
-
-## 📁 Структура проекта
-
-```
-competitor-monitor/
-├── backend/
-│   ├── __init__.py
-│   ├── main.py              # FastAPI приложение
-│   ├── config.py            # Конфигурация
-│   ├── models/
-│   │   ├── __init__.py
-│   │   └── schemas.py       # Pydantic модели
-│   └── services/
-│       ├── __init__.py
-│       ├── openai_service.py    # Работа с OpenAI API
-│       ├── parser_service.py    # Парсинг веб-страниц
-│       └── history_service.py   # Управление историей
-├── frontend/
-│   ├── index.html           # HTML страница
-│   ├── styles.css           # Стили
-│   └── app.js               # JavaScript логика
-├── requirements.txt         # Runtime dependencies
-├── requirements-dev.txt     # Runtime и test dependencies
-├── .env.example             # Пример .env файла
-├── history.json             # Файл истории (создаётся автоматически)
-├── README.md                # Этот файл
-└── docs.md                  # Документация API
-```
-
-## 🔧 Функциональность
-
-### Анализ текста (`/analyze_text`)
-- Принимает текст конкурента (минимум 10 символов)
-- Возвращает:
-  - Сильные стороны
-  - Слабые стороны
-  - Уникальные предложения
-  - Рекомендации по улучшению
-  - Общее резюме
-
-### Анализ изображений (`/analyze_image`)
-- Принимает изображения: PNG, JPG, GIF, WEBP
-- Возвращает:
-  - Описание изображения
-  - Маркетинговые инсайты
-  - Оценку визуального стиля (0-10)
-  - Рекомендации
-
-### Парсинг сайтов (`/parse_demo`)
-- Принимает URL сайта
-- Извлекает: title, h1, первый абзац
-- Автоматически анализирует извлечённый контент
-
-### История (`/history`)
-- Хранит последние 10 запросов
-- Сохраняет тип запроса, краткое описание, время
-
-## 🛠️ Технологии
-
-- **Backend**: FastAPI, Python 3.9+
-- **AI**: OpenAI GPT-4o-mini (или GPT-4.1)
-- **Frontend**: Vanilla JS, CSS3
-- **Парсинг**: BeautifulSoup4, httpx
-- **Валидация**: Pydantic
-
-## 📖 API Документация
-
-После запуска сервера доступна интерактивная документация:
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
-
-Подробная документация API в файле [docs.md](docs.md)
-
-## ⚠️ Требования
-
-- Python 3.9+
-- OpenAI API ключ с доступом к GPT-4o-mini или GPT-4.1
-- Интернет-соединение для работы AI и парсинга
-
-## 📝 Лицензия
-
-MIT License
-
+Полный cutover inventory и результаты: [docs/STAGE9_VERIFICATION.md](docs/STAGE9_VERIFICATION.md). Спецификация: [PEM08_V2_SPEC.md](PEM08_V2_SPEC.md); исторический поэтапный план: [docs/V2_MIGRATION_PLAN.md](docs/V2_MIGRATION_PLAN.md).

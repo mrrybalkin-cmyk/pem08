@@ -1,5 +1,5 @@
 -r requirements.txt
 
-# Stage 1 test foundation
-pytest>=9.1.1
-pytest-asyncio>=1.4.0
+# Offline regression and explicit Chromium acceptance tests.
+pytest==9.1.1
+pytest-asyncio==1.4.0

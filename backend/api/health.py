@@ -5,12 +5,13 @@ from typing import Literal
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
+from backend.api.errors import V2Route, ERROR_RESPONSES
 from backend.config import settings
 from backend.services.browser_service import browser_service
 
 router = APIRouter(
     prefix="/api/v2",
-    tags=["health"],
+    tags=["health"], route_class=V2Route, responses=ERROR_RESPONSES,
 )
 
 
