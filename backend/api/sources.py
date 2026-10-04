@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends, File, Form, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.routing import APIRoute
 from sqlalchemy.orm import Session
 
@@ -11,7 +11,8 @@ from backend.database import get_db
 from backend.models.api import SourceDetailResponse, SourceErrorResponse, TextSourceCreate, UrlSourceCreate
 from backend.services.ai_service import AIConfigurationError, AIProviderError, AIProviderTimeoutError
 from backend.services.ingestion_service import ResourceNotFound, delete_source, ingestion_service, source_detail
-from backend.services.storage_service import ImageTooLarge, InvalidImage
+from backend.services.storage_service import ImageTooLarge, InvalidImage, StorageService, ScreenshotStorage
+from backend.repositories import sources as source_repository
 from backend.services.document_service import InvalidPDF, PDFTooLarge
 from backend.security.url_validation import InvalidURL
 from backend.services.browser_service import BrowserCaptureError, BrowserTimeoutError
@@ -117,3 +118,36 @@ async def create_url_source(competitor_id: str, payload: UrlSourceCreate, db: Se
 @router.post("/sources/{source_id}/refresh", response_model=SourceDetailResponse, status_code=201)
 async def refresh_source(source_id: str, db: Session = Depends(get_db)):
     return await ingestion_service.refresh(db, source_id)
+
+
+@router.get("/sources/{source_id}/snapshots/{snapshot_id}/artifact", response_class=FileResponse)
+def preview_artifact(source_id: str, snapshot_id: str, db: Session = Depends(get_db)):
+    """Stage 8 preview: DB-owned image/screenshot only, never a client path."""
+    source = source_repository.get_source(db, source_id)
+    snapshot = source_repository.get_snapshot(db, snapshot_id)
+    if source is None or snapshot is None or snapshot.source_id != source_id:
+        raise ResourceNotFound("Artifact not found")
+    if source.source_type == "image":
+        stored_path, storage = source.storage_path, StorageService(settings.upload_dir)
+        media_type = source.mime_type
+        if media_type not in {"image/jpeg", "image/png", "image/webp"}:
+            raise ResourceNotFound("Artifact not found")
+    elif source.source_type == "url":
+        stored_path, storage = snapshot.screenshot_path, ScreenshotStorage(settings.screenshot_dir)
+        media_type = "image/png"
+    else:
+        raise ResourceNotFound("Artifact not found")
+    try:
+        path = storage.resolve(stored_path) if stored_path else None
+    except (ValueError, TypeError):
+        raise ResourceNotFound("Artifact not found") from None
+    if path is None or not path.is_file():
+        raise ResourceNotFound("Artifact not found")
+    if source.source_type == "image" and path.suffix != {
+        "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp",
+    }[media_type]:
+        raise ResourceNotFound("Artifact not found")
+    return FileResponse(path, media_type=media_type, headers={
+        "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store",
+        "Content-Disposition": "inline",
+    })
