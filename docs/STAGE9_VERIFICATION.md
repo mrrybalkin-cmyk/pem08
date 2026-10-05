@@ -230,9 +230,9 @@ Verification boundary: no real external AI request or public website was made. U
 
 Security-best-practices skill was read for the authorized hardening work:
 
-- C:/Users/admin/.codex/skills/security-best-practices/SKILL.md
-- C:/Users/admin/.codex/skills/security-best-practices/references/python-fastapi-web-server-security.md
-- C:/Users/admin/.codex/skills/security-best-practices/references/javascript-general-web-frontend-security.md
+- ~/.codex/skills/security-best-practices/SKILL.md
+- ~/.codex/skills/security-best-practices/references/python-fastapi-web-server-security.md
+- ~/.codex/skills/security-best-practices/references/javascript-general-web-frontend-security.md
 
 User scope takes precedence: no new authentication, UI framework or removal of Swagger/OpenAPI. No skill-driven publication or messaging action.
 

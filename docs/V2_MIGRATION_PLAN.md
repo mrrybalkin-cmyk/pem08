@@ -6,7 +6,7 @@
 
 ## 1. Current repository baseline
 
-- Корень: `C:\Users\admin\CodexWorkspace\pem08-v2`.
+- Корень: локальный checkout `pem08-v2`.
 - Ветка: `develop-v2`.
 - HEAD: `4a0ebe150d19ac9cf79f95e3044fb19909edadef` — `docs: add v2 implementation specification`.
 - До аудита `git status --short` пустой. В репозитории 27 tracked-файлов, 14 файлов Python, один PyInstaller spec. Локальных `AGENTS.md`, тестов, CI, lock-файла и проектного virtualenv не обнаружено. Применены инструкции пользователя из сессии.
@@ -40,9 +40,9 @@ PEM08_V2_SPEC.md
 
 Для security-части прочитаны:
 
-- `C:/Users/admin/.codex/skills/security-best-practices/SKILL.md`;
-- `C:/Users/admin/.codex/skills/security-best-practices/references/python-fastapi-web-server-security.md`;
-- `C:/Users/admin/.codex/skills/security-best-practices/references/javascript-general-web-frontend-security.md`.
+- `~/.codex/skills/security-best-practices/SKILL.md`;
+- `~/.codex/skills/security-best-practices/references/python-fastapi-web-server-security.md`;
+- `~/.codex/skills/security-best-practices/references/javascript-general-web-frontend-security.md`.
 
 Проверка ориентирована на локальный однопользовательский MVP: авторизация и cloud deployment не добавляются как новые обязательные требования.
 
@@ -340,14 +340,14 @@ API сохраняет пути и семантику §10: competitors CRUD; te
 
 ### Первоначальный аудит
 
-Команды выполнены из корня проекта. Для Git после первоначального отказа использован только command-scoped override: `git -c safe.directory=C:/Users/admin/CodexWorkspace/pem08-v2 ...`. Git config не изменялся.
+Команды выполнены из корня проекта. Для Git после первоначального отказа использован только command-scoped override: `git -c safe.directory=<absolute-checkout-path> ...`. Git config не изменялся.
 
 | Реальная проверка | Результат |
 |---|---|
 | `Get-Location`, `rg --files --hidden -g '!.git/**'`, чтение файлов | Подтверждены структура, отсутствие локальных AGENTS/test/lock/CI и содержимое контрактов/кода |
 | Первоначальные `git status`, `branch`, `log` без override | Отказ `detected dubious ownership`, владелец repo и sandbox identity различаются |
 | `git -c safe.directory=... status --short`, `branch --show-current`, `log -1 --oneline`, `rev-parse HEAD`, `ls-files` | Чистый старт, develop-v2, baseline 4a0ebe1, 27 tracked-файлов |
-| `python --version`, `Get-Command python,py,node` | Python 3.14.0: `C:\Users\admin\AppData\Local\Programs\Python\Python314\python.exe`; Node доступен |
+| `python --version`, `Get-Command python,py,node` | Python 3.14.0 из пользовательской установки; Node доступен |
 | `py -0p` | `No installed Pythons found!`; launcher не нашёл регистрации в данном контексте, хотя `python` работает |
 | Inline Python через `python -B -`: `compile(p.read_bytes(), str(p), 'exec')` для всех `*.py` | Успех: 14 файлов; компиляция в памяти без `.pyc` |
 | `compile()` для `desktop/CompetitorMonitor.spec` | Синтаксис успешен; это не запуск сборки PyInstaller |

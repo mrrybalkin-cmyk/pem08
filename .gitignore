@@ -16,6 +16,7 @@ env/
 dist/
 build/
 *.exe
+*.spec
 
 # OS junk
 .DS_Store
@@ -30,3 +31,16 @@ data/*
 !data/.gitkeep
 .pytest-temp/
 .pytest-runtime/
+.pytest-*/
+*.log
+logs/
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+/uploads/
+/screenshots/
+/checkpoints/
+/tmp/
+/temp/

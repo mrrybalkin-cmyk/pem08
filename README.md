@@ -1,88 +1,199 @@
-# Competitor Intelligence — PEM08 v2
+# Competitor Intelligence Assistant — PEM08 v2
 
-Локальное аналитическое Web workspace: конкуренты → источники → доказательный анализ → сводный анализ → сравнение. FastAPI, статические ES modules без Node/build step, SQLAlchemy/SQLite, AsyncOpenAI, async Playwright и PyMuPDF.
+Локальное Web-приложение для сбора источников о конкурентах, доказательного AI-анализа, построения сводного профиля и сравнения компаний.
 
-## Установка и запуск (PowerShell)
+## О проекте / Case
 
-Проверенная среда: Python 3.14; прямые зависимости закреплены в requirements.txt.
+Аналитику или маркетологу приходится собирать сведения о конкурентах из разных источников и вручную сводить их в единый анализ. PEM08 объединяет эту работу в одном пространстве: принимает текст, изображения, PDF и публичные URL, сохраняет исходные материалы и структурированные результаты, формирует профиль конкурента и сравнивает 2–5 компаний.
+
+Выводы относятся к представленным материалам и их коммуникации. Оценки модели не являются объективным измерением качества бизнеса, продукта или инвестиционной привлекательности. Для проверки результатов доступны evidence, происхождение данных и limitations.
+
+## Основной workflow
+
+```text
+Competitor
+   ↓
+Text / Image / PDF / URL
+   ↓
+Source Snapshot
+   ↓
+Structured AI Analysis
+   ↓
+Aggregate Competitor Profile
+   ↓
+2–5 Competitor Comparison
+```
+
+Добавление источника запускает его AI-анализ. «Повторить анализ» использует сохранённый snapshot; «Обновить страницу» повторно загружает URL и создаёт новый snapshot. «Последний сводный» открывает сохранённый результат без AI-запроса. Новое сравнение выполняется только кнопкой «Сравнить выбранных».
+
+## Скриншоты
+
+**Desktop workspace и анализ отдельного источника.** Список конкурентов, источники и отчёт с доказательствами находятся в трёх панелях.
+
+![Desktop workspace и source analysis](docs/images/workspace-source-analysis.png)
+
+**Сводный анализ конкурента.** Режим и контекст обозначены над отчётом; подробности и обоснования оценок доступны отдельно.
+
+![Aggregate competitor analysis](docs/images/aggregate-analysis.png)
+
+**Сравнение конкурентов.** Общие критерии, ключевые выводы и ограничения помогают сопоставить профили.
+
+![Competitor comparison](docs/images/competitor-comparison.png)
+
+Изображения получены при Stage 11 review сохранённых результатов по публичным материалам Anthropic и OpenAI. Это иллюстрация интерфейса и AI-интерпретаций, а не актуальный справочник о компаниях. Рабочая DB и исходные runtime-файлы в репозиторий не включены.
+
+## Реализованные функции
+
+- CRUD карточек конкурентов: название, сайт, ниша и заметки.
+- Text, JPEG/PNG/WebP Image, PDF и URL sources; Chromium capture публичных веб-страниц.
+- Сохранённые snapshots, source analysis, reanalysis, URL refresh и история анализов.
+- Aggregate competitor analysis по последним анализам текущих snapshots; comparison 2–5 конкурентов с сохранёнными aggregate-профилями.
+- Executive summary, scorecard с rationale, evidence, рекомендации и ограничения; сохранение input/output token usage, когда их возвращает провайдер.
+- Responsive Web UI для desktop/tablet/mobile, безопасный plain-text DOM rendering, обработка ошибок, loading и конкурентных запросов.
+- Локальная SQLite persistence и контролируемые файловые артефакты; данные сохраняются после перезапуска.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    UI[Browser UI: vanilla ES modules] --> API[FastAPI /api/v2]
+    API --> S[Services: ingestion, preparation, AI, aggregate, comparison]
+    S --> R[Repositories]
+    R --> DB[(SQLite)]
+    S --> F[Filesystem: uploads and screenshots]
+    S --> O[External: OpenAI API]
+    S --> B[Local: Playwright Chromium]
+```
+
+**Source** — зарегистрированный материал конкурента. **Snapshot** — сохранённая версия его содержимого и метаданных. **Analysis** — структурированный AI-результат для snapshot или сводный результат конкурента. Обновление URL создаёт новую версию; повторный анализ сохраняет новый результат без повторного capture.
+
+Подробнее: [Architecture](docs/ARCHITECTURE.md) и [API quick reference](docs.md).
+
+## Technology stack
+
+Python · FastAPI/Uvicorn · SQLAlchemy/SQLite · Pydantic · OpenAI Python SDK / AsyncOpenAI · Playwright/Chromium · PyMuPDF · Pillow · vanilla JavaScript ES modules · HTML/CSS · pytest/pytest-asyncio.
+
+Frontend не требует Node или build pipeline. Node используется только для необязательной проверки JS syntax.
+
+## Quick Start — Windows / PowerShell
+
+Проверенная версия: **Python 3.14**. Прямые зависимости закреплены в `requirements.txt`; другие версии Python отдельно не подтверждены. Нужны Git и доступ к сети для установки dependencies, Chromium и обращения к AI-провайдеру.
 
 ```powershell
+git clone https://github.com/mrrybalkin-cmyk/pem08.git
+cd pem08
+
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
+
 python -m pip install -r requirements.txt
 python -m playwright install chromium
+
 Copy-Item .env.example .env
-# Заполните AI_API_KEY и параметры вашего OpenAI-compatible провайдера.
+```
+
+Откройте созданный локальный `.env` и заполните `AI_API_KEY` своим ключом. В репозитории и примере значение намеренно пустое:
+
+```env
+AI_API_KEY=
+```
+
+Скопированный `.env.example` настроен на direct OpenAI API: `AI_PROVIDER=openai`, `AI_BASE_URL=https://api.openai.com/v1`, `AI_MODEL=gpt-6-luna`. Модель должна быть доступна вашему аккаунту и поддерживать structured output и vision. Ключ используется backend и не вводится в Web UI. Не добавляйте `.env` в Git.
+
+```powershell
 python run.py
 ```
 
-Единственная команда запуска приложения: `python run.py`. Откройте http://127.0.0.1:8000. API: `/api/v2`, Swagger: `/docs`, ReDoc: `/redoc`, схема: `/openapi.json`, health: `/api/v2/health`.
+Откройте **http://127.0.0.1:8000**. Health: `/api/v2/health`; API documentation: `/docs`, `/redoc`, `/openapi.json`. Запускайте команду из корня clone; остановка сервера — `Ctrl+C`.
 
-Без ключа сервер и workspace запускаются, health честно сообщает `ai_configured=false`; новые AI-анализы недоступны. Наличие ключа не означает, что провайдер доступен или поддерживает выбранную модель/structured output/vision. Рабочий провайдер должен поддерживать `chat.completions.parse` с полными Pydantic schemas.
+Если activation script запрещён политикой вашей системы, используйте `.\.venv\Scripts\python.exe` вместо `python` в командах установки и запуска. Менять execution policy для приложения не требуется.
 
-## Workflow
+Без ключа сервер и UI запускаются, health сообщает `ai_configured=false`; просмотр сохранённых результатов и карточки конкурентов доступны, новые AI-анализы недоступны. Наличие ключа само по себе не подтверждает доступность провайдера или модели. Новые анализы используют платный API согласно тарифу провайдера.
 
-- Создайте конкурентов: название, сайт, ниша, заметки; редактирование и удаление доступны в UI.
-- Добавьте текст (10–30 000 символов), JPEG/PNG/WebP, PDF или HTTP(S) URL. Источник сохраняется в SQLite и автоматически анализируется.
-- Изображение анализируется визуально; PDF обрабатывается PyMuPDF: извлечённый текст и изображения выбранных страниц. Длинные PDF анализируются частично с явными limitations.
-- URL открывается Chromium через Playwright: итоговый URL, title, meta description, видимый текст и PNG screenshot сохраняются как snapshot. Длинный текст обрезается с limitations.
-- «Повторить анализ» использует текущий сохранённый snapshot и создаёт новый analysis; URL повторно не загружается.
-- «Обновить страницу» доступно только для URL: новый capture, новый snapshot, новый analysis. Предыдущие snapshots сохраняются.
-- «Сводный анализ» объединяет последние analyses текущих snapshots конкурента; `analysis_type=aggregate`, `snapshot_id=null`. Старый сводный результат можно открыть без нового AI-запроса.
-- «Сравнить» принимает 2–5 разных конкурентов с уже сохранённым сводным анализом; UI показывает одинаковые критерии, strengths/gaps и limitations. Скрытого создания aggregate и вычисления winner нет.
-- Executive summary, scorecard с rationale, overview, evidence/provenance, actions и limitations показываются безопасным plain text. История analyses доступна в workspace.
-- Режим и конкурент указаны над отчётом: анализ отдельного источника или сводный анализ конкурента. Ключевые выводы отделены от подробного обзора; обоснования оценок раскрываются кнопкой «Обоснование». На mobile вторичные секции и текст источника раскрываются по запросу, переходы «Конкуренты / Источники / Анализ» доступны сверху.
-- В сравнении состояния выбора, готовности, выполнения и ошибки различимы; ошибка сохраняет выбор для повтора. Только «Сравнить выбранных» запускает новый запрос. История сохранённых comparisons пока не доступна в UI.
+Короткий сценарий для преподавателя: [Demo guide](docs/DEMO.md).
 
-## Persistence и артефакты
+## Configuration
 
-SQLite (`DATABASE_URL`) хранит конкурентов, источники, snapshots, analyses и comparisons и сохраняет их после перезапуска. Оригинальные uploads и PNG screenshots лежат в отдельных каталогах. Сохраняйте резервную копию SQLite вместе с обоими каталогами при остановленном приложении. Историческое comparison остаётся после удаления конкурента; остальные связанные записи и принадлежащие им файлы удаляются.
+Основные значения ниже относятся к скопированному `.env.example`. Полный набор параметров — в этом файле; локальные значения меняются только в `.env`.
 
-Preview изображения/URL screenshot выдаётся только через DB-привязанный `/api/v2/sources/{source_id}/snapshots/{snapshot_id}/artifact`: UUID-файл, проверенный resolver, без клиентского filesystem path. PDF preview — метаданные, извлечённый текст и информация о страницах; inline PDF serving не используется.
-
-При AI failure уже сохранённые source/snapshot и артефакты остаются для retry. До успешного сохранения snapshot ошибки DB/ingestion убирают новые файлы. При неуспешном удалении DB rollback восстанавливает удалённые файлы; посторонние файлы не затрагиваются.
-
-## Конфигурация
-
-`.env.example` содержит действующие параметры. `.env` исключён из Git.
-
-| Параметры | Назначение |
+| Variable | Назначение / example |
 |---|---|
-| APP_ENV, APP_HOST, APP_PORT | `development` включает Uvicorn reload на non-Windows системах; на Windows reload отключён для совместимости Playwright с subprocess. Любое другое значение APP_ENV также отключает reload. По умолчанию 127.0.0.1:8000. API_HOST/API_PORT поддерживаются как необязательные aliases; предпочтительны APP_* |
-| AI_PROVIDER, AI_API_KEY, AI_BASE_URL, AI_MODEL | Провайдер/ключ/base URL/идентификатор модели; defaults в `.env.example`, доступность зависит от провайдера |
-| AI_REASONING_EFFORT, AI_TIMEOUT_SECONDS | Reasoning effort; пустое значение не отправляется. Timeout в секундах |
-| DATABASE_URL, UPLOAD_DIR, SCREENSHOT_DIR | SQLite и каталоги артефактов; по умолчанию `data/` |
-| MAX_IMAGE_MB, MAX_PDF_MB | Ограничения upload: 10 / 25 MiB |
-| MAX_TEXT_CHARS, MAX_WEB_TEXT_CHARS | Лимиты текста: 30 000 / 25 000 |
-| MAX_PDF_PAGES_ANALYZED | По умолчанию 8 выбранных страниц, включая начало/конец |
-| BROWSER_HEADLESS, BROWSER_TIMEOUT_MS | Chromium headless и timeout capture (20 000 ms) |
-| BROWSER_VIEWPORT_WIDTH, BROWSER_VIEWPORT_HEIGHT | Viewport capture 1440 × 1200 |
-| CORS_ORIGINS | Список точных HTTP(S) origins через запятую. Default только localhost; пустое значение отключает cross-origin доступ. Wildcard запрещён, credentials отключены |
-| LOG_LEVEL | DEBUG/INFO/WARNING/ERROR/CRITICAL |
+| `APP_ENV` | `development`; на Windows reload отключён для совместимости Playwright, на других системах development включает reload |
+| `APP_HOST`, `APP_PORT` | Local binding: `127.0.0.1`, `8000` |
+| `AI_PROVIDER`, `AI_API_KEY` | `openai`; ключ заполните локально, placeholder пустой |
+| `AI_BASE_URL`, `AI_MODEL` | `https://api.openai.com/v1`, `gpt-6-luna` |
+| `AI_REASONING_EFFORT`, `AI_TIMEOUT_SECONDS` | `low`, `60`; пустой reasoning effort не отправляется провайдеру |
+| `DATABASE_URL` | `sqlite:///./data/app.db`; DB создаётся при startup |
+| `UPLOAD_DIR`, `SCREENSHOT_DIR` | `./data/uploads`, `./data/screenshots` |
+| `MAX_IMAGE_MB`, `MAX_PDF_MB` | 10 / 25 MiB |
+| `MAX_TEXT_CHARS`, `MAX_WEB_TEXT_CHARS` | 30 000 / 25 000 символов |
+| `MAX_PDF_PAGES_ANALYZED` | 8 выбранных страниц; частичный анализ отражается в metadata/limitations |
+| `BROWSER_TIMEOUT_MS` | 20 000 ms для capture; viewport 1440 × 1200 |
+| `CORS_ORIGINS`, `LOG_LEVEL` | Точные local origins через запятую; `INFO` |
 
-## Границы безопасности и ограничения
+SQLite и оба каталога артефактов составляют единый набор данных: для резервной копии сохраняйте их вместе при остановленном приложении. AI failure сохраняет уже подготовленный source/snapshot для retry; удаление конкурента удаляет его источники и принадлежащие им артефакты, но сохраняет исторические comparisons.
 
-Core предназначен для локальной работы доверенного пользователя: authentication отсутствует. APP_HOST по умолчанию loopback; публикация в общедоступной сети требует отдельной инфраструктуры доступа. CORS не заменяет authentication.
+## Security / Safety
 
-URL policy блокирует private/loopback/link-local/metadata/multicast/reserved адреса, credentials и неожиданные schemes; redirects и subrequests повторно проверяются. Capture не выполняет login и не обходит CAPTCHA/paywall. Это ограниченный browser capture публичных страниц; сетевой egress control остаётся дополнительной инфраструктурной границей. AI вывод может быть неполным или ошибочным: evidence и limitations следует проверять.
+- `.env`, virtual environments, DB, uploads, capture screenshots, test runtime и local logs исключены из Git. В `.env.example` нет API key; опубликованные screenshots проверены на credentials и приватные данные.
+- URL policy блокирует private/loopback/link-local/metadata/multicast/reserved адреса, URL credentials и неожиданные schemes; redirects и subrequests проверяются повторно. Chromium использует изолированные contexts без persistent profile.
+- AI-результаты и пользовательские данные рендерятся через `textContent`/DOM construction; ссылки допускают только HTTP(S) и используют `noopener noreferrer`.
+- Uploads ограничены типом и размером; изображения проверяются по содержимому, PDF обрабатываются локально с ограничением страниц и текста.
+- Файловый preview привязан к source/snapshot в DB и application-generated UUID-файлам; произвольные filesystem paths не принимаются.
+- Default server binding — loopback. CORS использует explicit origins; ошибки и диагностические логи не раскрывают request bodies, ключи или сырые исключения клиенту.
 
-Все ошибки API используют HTTP statuses и `{"error":{"code":"...","message":"...","details":null}}`: 400 invalid operation, 404 missing resource, 413 oversized upload, 422 validation, 502 provider failure, 504 timeout, 500 internal failure. CORS preflight — стандартный протокол middleware, не JSON API response. Клиенту не выдаются исключения, secrets или пути. Сервер пишет method, шаблон route, status, duration и code; для unexpected failure — тип и stack frames без значения исключения, locals или request body. Access logging Uvicorn отключён, query/header/document/binary/AI payload не логируются.
+Приложение рассчитано на **локального доверенного пользователя**: auth и multi-user security model отсутствуют. Публичный GitHub repository не означает, что приложение безопасно выставлять в открытый Интернет. SSRF checks не заменяют сетевой egress control: Chromium DNS не закрепляется на проверенном адресе. Не используйте URL capture для login, CAPTCHA/paywall bypass или confidential content.
 
-## Проверки
+## Testing / Verification
+
+Стандартные проверки не требуют API key, private DB или production данных. Тесты создают временные SQLite/uploads/screenshots, отключают чтение `.env` и блокируют внешнюю сеть; AI заменён deterministic fakes. Browser UI smoke проверяет реальные FastAPI/SQLite/UI workflows; отдельный local browser smoke проверяет Chromium capture.
 
 ```powershell
 python -m pip install -r requirements-dev.txt
 python -m pip check
 python -m pytest -q
-python -m tests.stage9_acceptance
-python -m tests.browser_local_smoke
 python -m tests.browser_ui_smoke
+python -m tests.browser_local_smoke
+python -m tests.stage9_acceptance
 python -m tests.startup_smoke
-python -m compileall -q backend tests
+python -m compileall -q backend tests run.py
 ```
 
-Все acceptance/smoke проверки offline, с временными SQLite/uploads/screenshots; production `data/` не используется. AI заменён детерминированными fakes; browser UI capture fake, отдельный local Chromium smoke проверяет реальный capture. JS syntax при доступном Node: `Get-ChildItem frontend/js/*.js | ForEach-Object { node --check $_.FullName }` (Node не runtime dependency).
+Если Node установлен:
 
-Отдельная визуальная проверка настоящих локальных данных: `python -m tests.product_visual_acceptance final`. Она требует существующих Anthropic/OpenAI profiles, открывает SQLite в read-only режиме, запрещает HTTP mutations и внешние запросы, не запускает AI. Сохранённый comparison берётся из SQLite и рендерится локально для проверки presentation; API истории comparisons отсутствует. Screenshots и JSON audit: `.pytest-temp/product-review/final`. Для сравнения с текущим commit: `python -m tests.product_visual_acceptance baseline`. Если запускаете pytest после capture, используйте `--basetemp=.pytest-temp/regression`, чтобы сохранить screenshots.
+```powershell
+Get-ChildItem frontend/js/*.js |
+    ForEach-Object { node --check $_.FullName }
+```
 
-Полный cutover inventory и результаты: [docs/STAGE9_VERIFICATION.md](docs/STAGE9_VERIFICATION.md). Спецификация: [PEM08_V2_SPEC.md](PEM08_V2_SPEC.md); исторический поэтапный план: [docs/V2_MIGRATION_PLAN.md](docs/V2_MIGRATION_PLAN.md).
+Последний полный regression: **511 tests passed** (2026-10-05). Browser smoke проверяет desktop 1440 × 900, tablet 1024 × 768, mobile 390 × 844, dialogs, overflow, XSS, safe URLs, duplicate submits, race conditions и current-snapshot semantics. Это результат локальных проверок, не статус GitHub Actions.
+
+`tests.product_visual_acceptance` — дополнительный read-only reviewer tool для уже существующих Anthropic/OpenAI profiles; он не входит в стандартный clone-oriented suite. Его screenshots и JSON audit сохраняются в ignored `.pytest-temp/product-review/`; после capture используйте pytest `--basetemp=.pytest-temp/regression`, если нужно сохранить эти локальные артефакты.
+
+## Project structure
+
+```text
+backend/             FastAPI routes, models, services, repositories, URL policy
+frontend/            HTML/CSS и vanilla ES modules
+tests/               Offline regression и explicit browser/startup acceptance
+docs/                Architecture, demo guide, проверенные screenshots, audit history
+data/                Local runtime DB и artifacts; в Git только .gitkeep
+run.py               Единая команда запуска
+requirements.txt     Runtime dependencies
+requirements-dev.txt Test dependencies
+.env.example         Portable configuration с пустым API key
+README.md            Project landing page
+```
+
+Спецификация: [PEM08_V2_SPEC.md](PEM08_V2_SPEC.md). Исторические engineering notes: [migration plan](docs/V2_MIGRATION_PLAN.md), [Stage 9 verification](docs/STAGE9_VERIFICATION.md).
+
+## Known limitations
+
+- Local trusted-user MVP: нет authentication, multi-user, tenant isolation или hosted deployment.
+- Comparison history сохраняется в SQLite, но не имеет отдельного UI history/GET endpoint.
+- Aggregate record не хранит историческое количество включённых источников; текущий список источников не подменяет историческое покрытие.
+- AI может ошибаться; scorecard относится к предоставленным материалам. PDF может анализироваться частично; URL capture зависит от доступности публичного сайта и не обходит его ограничения.
+
+### Desktop packaging
+
+Учебное задание предусматривало PyQt6/PyInstaller desktop packaging. Эта реализация поставляется как **Web-first local application** и намеренно не включает `build.py`, PyQt6 desktop wrapper, PyInstaller executable или `competitionmonitor.exe`.
