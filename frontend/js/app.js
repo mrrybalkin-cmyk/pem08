@@ -7,6 +7,8 @@ const competitorPath = id => `/competitors/${idPath(id)}`;
 const sourcePath = id => `/sources/${idPath(id)}`;
 const redraw = () => render(actions);
 function message(error, operation = null) {
+    if (error.code === 'BROWSER_ERROR') return 'Не удалось автоматически получить страницу. Сайт ограничил автоматическое получение страницы или не ответил корректно.';
+    if (error.code === 'BROWSER_TIMEOUT') return 'Не удалось автоматически получить страницу. Сайт не ответил за отведённое время.';
     if (error.code === 'ANALYSIS_DATA_NOT_READY') {
         if (operation === 'aggregate') return 'Для сводного анализа сначала нужен хотя бы один анализ текущего snapshot источника. Добавьте источник или нажмите «Повторить анализ».';
         if (operation === 'comparison') return 'Для выбранных конкурентов сначала нужен сводный анализ. Откройте карточку и создайте его из доступных анализов источников.';
@@ -158,13 +160,15 @@ function field(name, label, value = '', options = {}) {
     return input;
 }
 
-function openForm(kind, sourceType = 'text') {
+function openForm(kind, sourceType = 'text', recoveryUrl = '') {
     if (state.loading.has('form')) return;
+    recoveryUrl ||= kind === 'source' && state.modal?.kind === 'source' ? state.modal.recoveryUrl : '';
     const competitor = state.activeCompetitorDetail;
-    state.modal = { kind, sourceType, competitorId: state.activeCompetitorId, competitorVersion: state.competitorVersion, sourceVersion: state.sourceVersion };
+    state.modal = { kind, sourceType, recoveryUrl, competitorId: state.activeCompetitorId, competitorVersion: state.competitorVersion, sourceVersion: state.sourceVersion };
     $('editor-fields').replaceChildren();
     $('form-error').textContent = '';
     $('form-status').textContent = '';
+    $('source-recovery').replaceChildren();
     $('form-submit').disabled = false;
     $('form-submit').textContent = 'Сохранить';
     $('editor-title').textContent = kind === 'create' ? 'Новый конкурент' : kind === 'edit' ? 'Изменить конкурента' : 'Добавить источник';
@@ -181,6 +185,7 @@ function openForm(kind, sourceType = 'text') {
         field('niche', 'Ниша (необязательно)', kind === 'edit' ? competitor.niche : '', { max: 160 });
         field('notes', 'Заметки (необязательно)', kind === 'edit' ? competitor.notes : '', { multiline: true, max: 2000 });
     } else {
+        if (recoveryUrl) $('editor-fields').append(el('p', `Конкурент создан. Исходный URL сохранён в профиле: ${recoveryUrl}`, 'muted'));
         const types = el('div', null, 'actions');
         for (const [key, label] of [['text', 'Текст'], ['file', 'Изображение / PDF'], ['url', 'URL']]) types.append(button(label, () => openForm('source', key), false, key === sourceType ? 'active' : ''));
         $('editor-fields').append(types);
@@ -262,6 +267,7 @@ async function submitForm(event) {
     if (modal.kind === 'source' && modal.sourceType === 'text' && !values.text.trim()) { $('form-error').textContent = 'Введите текст.'; return; }
     state.loading.add('form');
     $('form-error').textContent = '';
+    $('source-recovery').replaceChildren();
     $('form-status').textContent = modal.kind === 'source' ? 'Источник отправляется · сервер подготовит контент, выполнит анализ и сохранит результат…' : 'Сохранение…';
     for (const control of $('editor-form').elements) control.disabled = true;
     let result;
@@ -311,6 +317,21 @@ async function submitForm(event) {
                 ? 'Источник уже сохранён. Повтор использует этот источник и не создаёт новый.'
                 : 'Исправьте первый источник и повторите. Новый конкурент создан не будет.';
             $('form-submit').textContent = modal.initialSourceId ? 'Повторить анализ' : 'Повторить добавление источника';
+            if (['BROWSER_ERROR', 'BROWSER_TIMEOUT'].includes(error.code) && !modal.initialSourceId && !modal.sourceUncertain) {
+                const url = values.initial_source.trim();
+                $('form-error').textContent = `Конкурент создан. ${message(error)}`;
+                $('form-status').textContent = 'URL сохранён. Повторите получение страницы или продолжите с другим источником. Новый конкурент создан не будет.';
+                $('form-submit').textContent = 'Повторить получение';
+                const choices = el('div', null, 'actions');
+                const continueWith = type => {
+                    if (state.loading.has('form') || state.modal !== modal) return;
+                    closeForm();
+                    openForm('source', type, url);
+                };
+                choices.append(button('Загрузить скриншот', () => continueWith('file')),
+                    button('Добавить другой источник', () => continueWith('text')));
+                $('source-recovery').append(el('p', url, 'prose'), choices);
+            }
         }
         // Ingestion persists retryable sources before AI; refresh without closing the form.
         if (modal.kind === 'source') {

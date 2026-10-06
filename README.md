@@ -163,6 +163,8 @@ python -m compileall -q backend tests run.py
 
 Для отдельной mocked onboarding regression: `python -m tests.browser_initial_source`. Полный `browser_ui_smoke` также включает эти сценарии. Запускайте browser smoke и pytest последовательно: они используют общий временный каталог `.pytest-runtime`.
 
+Если автоматическое получение первого URL не удалось, конкурент уже создан: форма сохраняет URL и предлагает **Повторить получение**, **Загрузить скриншот** через существующий Image workflow или **Добавить другой источник**. URL source сохраняется только после успешного capture; повтор проверяет уже сохранённые sources и не создаёт нового конкурента. Некоторые сайты возвращают HTTP 403/challenge; приложение не обходит их защиту. Mocked regression проверяет capture failure без AI, retry, screenshot fallback, последующие ручные sources и отсутствие дубликатов.
+
 После обновления frontend обновите уже открытую вкладку. Entry module имеет версию в URL; HTML и static assets требуют cache revalidation. Browser regression проверяет прогретый HTTP cache, реальные поля формы для `Cohere` + `https://cohere.com/`, POST competitor/source и совпадение загруженных JS-модулей с текущими файлами. Если в форме создания видно старое поле «Сайт (необязательно)», вкладка использует прежний UI; в текущей форме есть только «Первый источник (необязательно)» для URL/текста. Изменённые server cache headers применяются после перезапуска сервера.
 
 Если Node установлен:

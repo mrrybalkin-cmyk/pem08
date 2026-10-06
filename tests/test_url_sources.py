@@ -128,6 +128,35 @@ def test_capture_failure_preserves_old_state(url_api, refresh, failure, status):
     assert len(list(api.screenshots.glob("*"))) == (1 if refresh else 0)
 
 
+@pytest.mark.parametrize("failure,status,code", [
+    (BrowserCaptureError("HTTP 403"), 500, "BROWSER_ERROR"),
+    (BrowserTimeoutError("timeout"), 504, "BROWSER_TIMEOUT"),
+])
+def test_initial_perplexity_capture_failure_then_retry(url_api, failure, status, code):
+    from backend.models.db import Competitor
+    api = url_api
+    url = "https://www.perplexity.ai/"
+    created = api.client.post('/api/v2/competitors', json={'name': 'Perplexity AI', 'website_url': url})
+    assert created.status_code == 201
+    cid = created.json()['id']
+    path = f'/api/v2/competitors/{cid}/sources/url'
+    api.capture.side_effect = failure
+    failed = api.client.post(path, json={'url': url})
+    assert failed.status_code == status and failed.json()['error']['code'] == code
+    assert counts(api) == (0, 0, 0)
+    api.boundary.assert_not_awaited()
+    detail = api.client.get(f'/api/v2/competitors/{cid}').json()
+    assert detail['website_url'] == url and detail['sources'] == []
+    with api.sessions() as db:
+        assert db.query(Competitor).filter_by(name='Perplexity AI').count() == 1
+    api.capture.side_effect = None
+    api.capture.return_value = BrowserCapture(url, url, 'Perplexity', None, 'Mocked public page', image_bytes(), {})
+    retried = api.client.post(path, json={'url': url})
+    assert retried.status_code == 201
+    assert counts(api) == (1, 1, 1)
+    assert len(api.client.get(f'/api/v2/competitors/{cid}').json()['sources']) == 1
+
+
 @pytest.mark.parametrize("failure", ["missing", "corrupt", "unsafe"])
 def test_url_reanalyze_bad_screenshot(url_api, failure):
     api = url_api

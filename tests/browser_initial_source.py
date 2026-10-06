@@ -69,7 +69,7 @@ def verify_warm_module_cache(browser):
         page.get_by_role('button', name='Добавить конкурента', exact=True).click()
         expect(page.get_by_label('Первый источник (необязательно)', exact=True)).to_be_visible()
         assert page.locator('#editor-form [name=website_url]').count() == 0
-        assert '/static/js/app.js?v=initial-source-cohere-20261006' in served
+        assert '/static/js/app.js?v=capture-recovery-20261006' in served
         assert served.count('/static/js/app.js') == 1
         print('WARM_BROWSER_CACHE: old module reused before update; versioned entry loads current real form PASS')
     finally:
@@ -160,8 +160,8 @@ def run_onboarding(browser, origin, png, captures):
         page.goto(origin)
         settle()
         expect(page.locator('script[type=module]')).to_have_attribute(
-            'src', '/static/js/app.js?v=initial-source-cohere-20261006')
-        assert any(url.endswith('/static/js/app.js?v=initial-source-cohere-20261006') for url, _ in loaded_modules)
+            'src', '/static/js/app.js?v=capture-recovery-20261006')
+        assert any(url.endswith('/static/js/app.js?v=capture-recovery-20261006') for url, _ in loaded_modules)
         # Exact human scenario: use only the real creation dialog and its optional field.
         page.get_by_role('button', name='Добавить конкурента', exact=True).click()
         page.get_by_label('Название', exact=True).fill('Cohere')
@@ -270,6 +270,101 @@ def run_onboarding(browser, origin, png, captures):
         assert len(sources) == 5 and len({item['id'] for item in sources}) == 5
         assert {item['source_type'] for item in sources} == {'text', 'url', 'image', 'pdf'}
         assert source(first['id']) == original
+
+        # Real form -> real API -> capture failure; only service boundaries are mocked.
+        from backend.services.browser_service import browser_service, BrowserCaptureError, BrowserTimeoutError
+        original_capture = browser_service.capture
+        original_analyze = ai_service.analyze_source
+        blocked = True
+        ai_calls = []
+        failure = BrowserCaptureError('Navigation did not produce an HTML page')
+        async def failing_capture(url):
+            if blocked and url == 'https://www.perplexity.ai/':
+                raise failure
+            return await original_capture(url)
+        async def counted_analyze(prepared):
+            ai_calls.append(prepared.source_type)
+            return await original_analyze(prepared)
+        def capture_response(route):
+            response = route.fetch()
+            if response.status >= 400:
+                assert response.status in (500, 504)
+                assert response.json()['error']['code'] in ('BROWSER_ERROR', 'BROWSER_TIMEOUT')
+                expected_http.add((route.request.url, response.status))
+            route.fulfill(response=response)
+        browser_service.capture = failing_capture
+        ai_service.analyze_source = counted_analyze
+        page.route('**/sources/url', capture_response)
+        evidence = []
+        try:
+            for label, width, height, recovery in [('desktop', 1440, 900, 'retry'),
+                                                  ('mobile', 390, 844, 'image'),
+                                                  ('other', 1440, 900, 'text')]:
+                page.set_viewport_size({'width': width, 'height': height})
+                blocked = True
+                failure = BrowserTimeoutError('timeout') if recovery == 'text' else BrowserCaptureError('HTTP 403')
+                before_creates, before_ai = creates(), len(ai_calls)
+                open_create('Perplexity AI', 'https://www.perplexity.ai/')
+                capture('perplexity-' + label + '-form')
+                with page.expect_response(lambda r: r.request.method == 'POST' and r.url.endswith('/sources/url')) as failed:
+                    page.locator('#form-submit').click()
+                settle()
+                cid = state_value('activeCompetitorId')
+                assert creates() == before_creates + 1
+                assert detail(cid)['name'] == 'Perplexity AI'
+                assert detail(cid)['website_url'] == 'https://www.perplexity.ai/'
+                assert detail(cid)['sources'] == [] and len(ai_calls) == before_ai
+                expect(page.locator('#field-initial_source')).to_have_value('https://www.perplexity.ai/')
+                expect(page.locator('#form-error')).to_contain_text('Конкурент создан. Не удалось автоматически получить страницу.')
+                assert 'Browser capture' not in page.locator('#form-error').inner_text()
+                expect(page.locator('#source-recovery')).to_contain_text('https://www.perplexity.ai/')
+                expect(page.get_by_role('button', name='Повторить получение', exact=True)).to_be_enabled()
+                expect(page.get_by_role('button', name='Загрузить скриншот', exact=True)).to_be_enabled()
+                expect(page.get_by_role('button', name='Добавить другой источник', exact=True)).to_be_enabled()
+                page.locator('#form-submit').scroll_into_view_if_needed()
+                capture('perplexity-' + label + '-error')
+                if recovery == 'retry':
+                    blocked = False
+                    page.get_by_role('button', name='Повторить получение', exact=True).click()
+                    page.locator('#editor-form').evaluate("form => form.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}))")
+                else:
+                    page.get_by_role('button', name='Загрузить скриншот' if recovery == 'image' else 'Добавить другой источник', exact=True).click()
+                    expect(page.locator('#editor-title')).to_have_text('Добавить источник')
+                    expect(page.locator('#editor-fields')).to_contain_text('https://www.perplexity.ai/')
+                    if recovery == 'image':
+                        page.locator('input[type=file]').set_input_files({'name': 'perplexity.png', 'mimeType': 'image/png', 'buffer': png})
+                    else:
+                        page.get_by_label('Текст (10–30 000 символов)', exact=True).fill('Другой источник о Perplexity AI.')
+                    page.locator('#form-submit').click()
+                assert finish() == cid
+                entries = detail(cid)['sources']
+                assert len(entries) == 1 and entries[0]['source_type'] == {'retry': 'url', 'image': 'image', 'text': 'text'}[recovery]
+                assert creates() == before_creates + 1 and len(ai_calls) == before_ai + 1
+                assert detail(cid)['website_url'] == 'https://www.perplexity.ai/'
+                assert state_value('activeSourceId') == entries[0]['id']
+                expect(page.locator('#source-list .source-card')).to_have_count(1)
+                expect(page.locator('.summary')).to_be_visible()
+                assert requests.count(('POST', origin + '/api/v2/competitors/' + cid + '/sources/url')) == (2 if recovery == 'retry' else 1)
+                page.locator('#analysis-pane').scroll_into_view_if_needed()
+                assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+                page.screenshot(path=str(artifacts / f'perplexity-{label}-result.png'))
+                evidence.append({'competitor_id': cid, 'failed_url': failed.value.request.post_data_json['url'],
+                    'failure_status': failed.value.status, 'error_code': failed.value.json()['error']['code'],
+                    'recovery': recovery, 'source_id': entries[0]['id'], 'final_sources': len(entries),
+                    'competitor_posts': creates() - before_creates, 'mock_ai_calls': len(ai_calls) - before_ai})
+                # Ordinary Add source remains available after every recovery.
+                page.locator('#add-source').click()
+                page.get_by_label('Текст (10–30 000 символов)', exact=True).fill('Дополнительный ручной источник.')
+                page.locator('#form-submit').click()
+                finish()
+                assert len(detail(cid)['sources']) == 2
+                assert any(s['id'] == entries[0]['id'] for s in detail(cid)['sources'])
+            (artifacts / 'capture-recovery-network.json').write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding='utf-8')
+            print('CAPTURE_RECOVERY: real Perplexity form/API; failure with zero AI; retry/Image/text; no duplicate competitor/source; manual additions PASS')
+        finally:
+            browser_service.capture = original_capture
+            ai_service.analyze_source = original_analyze
+            page.unroute('**/sources/url', capture_response)
 
         # C: plain text, including whitespace trimming, uses text ingestion.
         text = 'Mistral AI develops generative AI models and services...'
@@ -418,7 +513,7 @@ def run_onboarding(browser, origin, png, captures):
         assert not errors and not external and not unexpected_http, (errors, external, unexpected_http)
         for text, location in console_errors:
             assert any(location.get('url') == url and text ==
-                       f'Failed to load resource: the server responded with a status of {status} ({"Bad Request" if status == 400 else "Bad Gateway"})'
+                       f'Failed to load resource: the server responded with a status of {status} ({ {400: "Bad Request", 500: "Internal Server Error", 502: "Bad Gateway", 504: "Gateway Timeout"}[status]})'
                        for url, status in expected_http), (text, location)
         print('INITIAL_SOURCE: name-only/URL/text/invalid URL/SSRF literal+DNS/partial failure/retry/no duplicates PASS')
         print('INITIAL_SOURCE + EXISTING ADD SOURCE: URL then Text/URL/Image/PDF; first source unchanged PASS')
