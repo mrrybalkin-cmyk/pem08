@@ -71,8 +71,11 @@ def test_provider_error_envelope(source_api, monkeypatch, exception, status, cod
 
 def test_browser_timeout_envelope(url_api, monkeypatch):
     monkeypatch.setattr(browser_service, "capture", AsyncMock(side_effect=BrowserTimeoutError("PRIVATE_SENTINEL")))
-    envelope(url_api.client.post(f"/api/v2/competitors/{url_api.competitor_id}/sources/url",
-                                json={"url": "https://public.example"}), 504, "BROWSER_TIMEOUT")
+    response = url_api.client.post(f"/api/v2/competitors/{url_api.competitor_id}/sources/url", json={"url": "https://public.example"})
+    assert response.status_code == 201
+    assert response.json()['processing_status'] == 'capture_failed'
+    assert response.json()['processing_error']['code'] == 'BROWSER_TIMEOUT'
+    assert 'PRIVATE_SENTINEL' not in response.text
 
 
 @pytest.mark.parametrize("method,function,payload", [

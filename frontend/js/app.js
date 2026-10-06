@@ -1,4 +1,4 @@
-import { api, idPath } from './api.js';
+import { api, ApiError, idPath } from './api.js';
 import { state, currentAnalyses, orderedAnalyses } from './state.js';
 import { $, el, button } from './dom.js';
 import { render } from './workspace.js';
@@ -6,6 +6,10 @@ import { render } from './workspace.js';
 const competitorPath = id => `/competitors/${idPath(id)}`;
 const sourcePath = id => `/sources/${idPath(id)}`;
 const redraw = () => render(actions);
+function processed(result) {
+    if (result.processing_error) throw new ApiError(result.processing_error.message, result.processing_error.code, 201);
+    return result;
+}
 function message(error, operation = null) {
     if (error.code === 'BROWSER_ERROR') return 'Не удалось автоматически получить страницу. Сайт ограничил автоматическое получение страницы или не ответил корректно.';
     if (error.code === 'BROWSER_TIMEOUT') return 'Не удалось автоматически получить страницу. Сайт не ответил за отведённое время.';
@@ -185,7 +189,7 @@ function openForm(kind, sourceType = 'text', recoveryUrl = '') {
         field('niche', 'Ниша (необязательно)', kind === 'edit' ? competitor.niche : '', { max: 160 });
         field('notes', 'Заметки (необязательно)', kind === 'edit' ? competitor.notes : '', { multiline: true, max: 2000 });
     } else {
-        if (recoveryUrl) $('editor-fields').append(el('p', `Конкурент создан. Исходный URL сохранён в профиле: ${recoveryUrl}`, 'muted'));
+        if (recoveryUrl) $('editor-fields').append(el('p', `Исходный URL источника сохранён: ${recoveryUrl}`, 'muted'));
         const types = el('div', null, 'actions');
         for (const [key, label] of [['text', 'Текст'], ['file', 'Изображение / PDF'], ['url', 'URL']]) types.append(button(label, () => openForm('source', key), false, key === sourceType ? 'active' : ''));
         $('editor-fields').append(types);
@@ -242,7 +246,7 @@ async function initialSource(modal, value) {
             const saved = await api.get(sourcePath(modal.initialSourceId));
             if (currentAnalyses(saved).length) return saved;
             if (modal.sourceUncertain) throw new Error('Источник сохранён, но результат обработки пока неизвестен. Проверьте его в списке источников перед повторным анализом.');
-            return api.post(`${sourcePath(modal.initialSourceId)}/reanalyze`);
+            return processed(await api.post(`${sourcePath(modal.initialSourceId)}/${saved.source.source_type === 'url' && !saved.snapshots.length ? 'refresh' : 'reanalyze'}`));
         }
     }
     const sourceType = initialSourceType(value);
@@ -250,7 +254,7 @@ async function initialSource(modal, value) {
     try {
         const result = await ingestSource(modal.createdCompetitorId, sourceType, { label: '', text: value, url: value });
         modal.initialSourceId = result.source.id;
-        return result;
+        return processed(result);
     } catch (error) {
         modal.sourceUncertain = error.status === 0 || error.code === 'INVALID_RESPONSE';
         throw error;
@@ -295,7 +299,11 @@ async function submitForm(event) {
                 }
             } else result = await api.patch(competitorPath(modal.competitorId), payload);
         } else {
-            result = await ingestSource(modal.competitorId, modal.sourceType, values);
+            result = modal.persistedSourceId
+                ? await api.post(`${sourcePath(modal.persistedSourceId)}/refresh`)
+                : await ingestSource(modal.competitorId, modal.sourceType, values);
+            if (result.processing_error) modal.persistedSourceId = result.source.id;
+            processed(result);
         }
         state.loading.delete('form');
         closeForm();
@@ -317,10 +325,10 @@ async function submitForm(event) {
                 ? 'Источник уже сохранён. Повтор использует этот источник и не создаёт новый.'
                 : 'Исправьте первый источник и повторите. Новый конкурент создан не будет.';
             $('form-submit').textContent = modal.initialSourceId ? 'Повторить анализ' : 'Повторить добавление источника';
-            if (['BROWSER_ERROR', 'BROWSER_TIMEOUT'].includes(error.code) && !modal.initialSourceId && !modal.sourceUncertain) {
+            if (['BROWSER_ERROR', 'BROWSER_TIMEOUT'].includes(error.code) && modal.initialSourceId && !modal.sourceUncertain) {
                 const url = values.initial_source.trim();
-                $('form-error').textContent = `Конкурент создан. ${message(error)}`;
-                $('form-status').textContent = 'URL сохранён. Повторите получение страницы или продолжите с другим источником. Новый конкурент создан не будет.';
+                $('form-error').textContent = `Конкурент создан. Источник добавлен. ${message(error)}`;
+                $('form-status').textContent = 'URL источник сохранён. Повторите получение страницы или добавьте другой источник. Повтор использует сохранённый источник.';
                 $('form-submit').textContent = 'Повторить получение';
                 const choices = el('div', null, 'actions');
                 const continueWith = type => {
@@ -336,13 +344,18 @@ async function submitForm(event) {
         // Ingestion persists retryable sources before AI; refresh without closing the form.
         if (modal.kind === 'source') {
             try {
-                await reloadActive(modal.competitorId, modal.competitorVersion, modal.sourceVersion, state.activeSourceId);
+                await reloadActive(modal.competitorId, modal.competitorVersion, modal.sourceVersion, result?.source?.id || state.activeSourceId);
                 if (state.modal?.competitorId === state.activeCompetitorId) {
                     state.modal.competitorVersion = state.competitorVersion;
                     state.modal.sourceVersion = state.sourceVersion;
                 }
             } catch { /* Preserve original actionable error. */ }
             $('form-status').textContent = 'Если источник уже появился в списке, закройте форму и используйте «Повторить анализ».';
+            if (modal.persistedSourceId) {
+                $('form-status').textContent = 'Источник сохранён. Повторите получение или закройте форму: источник и recovery actions доступны в списке.';
+                $('form-submit').textContent = 'Повторить получение';
+                $('field-url').readOnly = true;
+            }
         }
     } finally {
         state.loading.delete('form');
@@ -356,6 +369,10 @@ async function submitForm(event) {
 }
 
 const actions = {
+    screenshotFallback() {
+        const source = state.activeSourceDetail?.source;
+        if (source?.source_type === 'url' && !state.loading.has(`source:${source.id}`)) openForm('source', 'file', source.url);
+    },
     selectCompetitor, selectSource,
     tab(key) { state.analysisTab = key; redraw(); },
     history(id) {
@@ -368,7 +385,7 @@ const actions = {
         const cv = state.competitorVersion, sv = state.sourceVersion;
         if (!id || (operation === 'refresh' && state.activeSourceDetail?.source.source_type !== 'url')) return;
         await mutation(`source:${id}`, async () => {
-            try { return await api.post(`${sourcePath(id)}/${operation}`); }
+            try { return processed(await api.post(`${sourcePath(id)}/${operation}`)); }
             catch (error) {
                 // Refresh may persist a new snapshot before an AI error.
                 try { await reloadActive(competitor, cv, sv, id); } catch { /* Report the original error. */ }

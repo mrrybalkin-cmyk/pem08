@@ -1,5 +1,5 @@
 import { $, el, section, empty, button, date, disclosure, reportSummary } from './dom.js';
-import { state, currentAnalyses } from './state.js';
+import { state, currentAnalyses, currentSnapshot } from './state.js';
 
 export const metrics = {
     positioning_clarity: 'Ясность позиционирования',
@@ -20,6 +20,15 @@ export function renderAnalysis(actions) {
     root.replaceChildren();
     const analysis = state.activeAnalysis;
     if (!analysis) {
+        if (state.activeSourceDetail?.source.source_type === 'url' && !currentSnapshot(state.activeSourceDetail)) {
+            const busy = state.loading.has(`source:${state.activeSourceId}`);
+            root.append(empty('Источник добавлен, но содержимое пока не получено.', 'Не удалось получить страницу. Повторите получение или добавьте скриншот как отдельный источник.'),
+                el('p', state.activeSourceDetail.source.url, 'prose'),
+                button('Повторить получение', () => actions.sourceOperation('refresh'), busy),
+                button('Загрузить скриншот', actions.screenshotFallback, busy),
+                button('Удалить источник', actions.deleteSource, busy, 'danger'));
+            return;
+        }
         root.append(empty(state.activeSourceId ? 'Для текущего snapshot пока нет анализа' : 'Выберите источник для анализа',
             state.activeSourceId ? 'Повторите анализ текущего содержимого источника.' : 'Добавьте источник или откройте последний сводный результат.'));
         if (state.activeSourceDetail) root.append(button('Повторить анализ', () => actions.sourceOperation('reanalyze'), state.loading.has(`source:${state.activeSourceId}`)));

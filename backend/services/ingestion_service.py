@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 from threading import Event
 from time import perf_counter
 from uuid import uuid4
@@ -12,12 +13,12 @@ from pydantic import ValidationError
 
 from backend.config import settings
 from backend.models.analysis import CompetitorAnalysis, PreparedAnalysisInput, SourceType
-from backend.models.api import CompetitorDetailResponse, SourceDetailResponse, TextSourceCreate
+from backend.models.api import CompetitorDetailResponse, SourceDetailResponse, SourceErrorDetail, TextSourceCreate
 from backend.repositories import analyses, competitors, sources
 from backend.services.ai_service import AIResponseError, ai_service
 from backend.services.prompt_service import ANALYSIS_PROMPT_VERSION
-from backend.services.browser_service import browser_service
-from backend.security.url_validation import InvalidURL, validate_url
+from backend.services.browser_service import browser_service, BrowserCaptureError, BrowserTimeoutError
+from backend.security.url_validation import InvalidURL, resolve_and_validate_url
 from backend.services.document_service import InvalidPDF, prepare_pdf, image_data_url, add_pdf_limitations
 from backend.services.storage_service import InvalidImage, StorageService, ScreenshotStorage, validate_image
 
@@ -42,10 +43,16 @@ def source_detail(db: Session, source_id: str) -> SourceDetailResponse:
     source = sources.get_source(db, source_id)
     if source is None:
         raise ResourceNotFound("Source not found")
+    snapshots = sources.list_snapshots(db, source_id)
+    history = analyses.list_source_analyses(db, source_id)
+    status = ('capture_failed' if source.source_type == SourceType.url and not snapshots
+              else 'ready' if snapshots and any(item.snapshot_id == snapshots[-1].id for item in history)
+              else 'analysis_failed')
     return SourceDetailResponse(
         source=source,
-        snapshots=sources.list_snapshots(db, source_id),
-        analyses=analyses.list_source_analyses(db, source_id),
+        snapshots=snapshots,
+        analyses=history,
+        processing_status=status,
     )
 
 
@@ -161,8 +168,24 @@ class IngestionService:
 
     async def ingest_url(self, db: Session, competitor_id: str, payload):
         await _offload(lambda: _competitor_name(db, competitor_id))
-        requested = validate_url(str(payload.url)).url
-        return await self._capture_url(db, competitor_id, requested, payload.label)
+        # Reject unsafe initial targets (including DNS) BEFORE persisting evidence.
+        requested = (await resolve_and_validate_url(str(payload.url))).url
+        source_id = str(uuid4())
+        cancelled = Event()
+        def persist_source():
+            try:
+                if competitors.get_competitor(db, competitor_id) is None:
+                    raise ResourceNotFound('Competitor not found')
+                sources.create_source(db, id=source_id, competitor_id=competitor_id,
+                                      source_type=SourceType.url, label=payload.label, url=requested)
+                if cancelled.is_set():
+                    raise asyncio.CancelledError()
+                db.commit()
+            except BaseException:
+                db.rollback()
+                raise
+        await _offload(persist_source, on_cancel=cancelled.set)
+        return await self._capture_url(db, competitor_id, requested, payload.label, source_id=source_id)
 
     async def refresh(self, db: Session, source_id: str):
         def load():
@@ -178,14 +201,19 @@ class IngestionService:
         competitor_id, requested, label = await _offload(load)
         return await self._capture_url(db, competitor_id, requested, label, source_id=source_id)
 
-    async def _capture_url(self, db, competitor_id, requested, label, *, source_id=None):
-        capture = await browser_service.capture(requested)
+    async def _capture_url(self, db, competitor_id, requested, label, *, source_id):
+        try:
+            capture = await browser_service.capture(requested)
+        except BrowserCaptureError as exc:
+            code = 'BROWSER_TIMEOUT' if isinstance(exc, BrowserTimeoutError) else 'BROWSER_ERROR'
+            logging.getLogger('competitor_monitor.capture').warning('capture_failed source_id=%s code=%s exception_type=%s', source_id, code, type(exc).__name__)
+            detail = await _offload(lambda: source_detail(db, source_id))
+            detail.processing_error = SourceErrorDetail(code=code, message='Не удалось автоматически получить страницу.')
+            return detail
         storage = ScreenshotStorage(settings.screenshot_dir)
         stored = None
         committed = False
         cancelled = Event()
-        new_source = source_id is None
-        source_id = source_id or str(uuid4())
         snapshot_id = str(uuid4())
         try:
             def save():
@@ -196,10 +224,7 @@ class IngestionService:
             def persist():
                 nonlocal committed
                 try:
-                    if new_source:
-                        sources.create_source(db, id=source_id, competitor_id=competitor_id,
-                                              source_type=SourceType.url, label=label, url=capture.requested_url)
-                    elif sources.get_source(db, source_id) is None:
+                    if sources.get_source(db, source_id) is None:
                         raise ResourceNotFound("Source not found")
                     metadata = {**capture.metadata, "source_id": source_id, "snapshot_id": snapshot_id,
                                 "screenshot_sha256": stored.sha256}

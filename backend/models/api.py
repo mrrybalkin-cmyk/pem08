@@ -141,21 +141,24 @@ class AnalysisResponse(BaseModel):
         return CompetitorAnalysis.model_validate_json(value, strict=True) if isinstance(value, str) else value
 
 
+class SourceErrorDetail(BaseModel):
+    code: str
+    message: str
+    details: JsonValue = None
+
+
 class SourceDetailResponse(BaseModel):
     source: SourceResponse
     snapshots: list[SnapshotResponse]
     analyses: list[AnalysisResponse]
+    # Derived from durable source/snapshot/analysis records, never a DB enum.
+    processing_status: Literal['capture_failed', 'analysis_failed', 'ready'] = 'ready'
+    processing_error: SourceErrorDetail | None = None
 
 
 class CompetitorDetailResponse(CompetitorResponse):
     sources: list[SourceResponse]
     latest_analysis: AnalysisResponse | None
-
-
-class SourceErrorDetail(BaseModel):
-    code: str
-    message: str
-    details: JsonValue = None
 
 
 class SourceErrorResponse(BaseModel):

@@ -62,6 +62,8 @@ def analysis_result():
 
 
 def fake_boundaries():
+    from backend.services import ingestion_service as ingestion_module
+    from backend.security.url_validation import resolve_and_validate_url
     from backend.services.ai_service import ai_service
     from backend.services.browser_service import browser_service, BrowserCapture
     from backend.models.analysis import ComparisonResult
@@ -87,11 +89,14 @@ def fake_boundaries():
     buffer = BytesIO()
     Image.new('RGB', (160, 100), '#22425a').save(buffer, format='PNG')
 
-    async def capture(url):
-        from backend.security.url_validation import resolve_and_validate_url
+    async def validate(url):
         async def resolver(hostname, _port):
             return ('10.0.0.1',) if hostname == 'private-dns.example' else ('93.184.216.34',)
-        await resolve_and_validate_url(url, resolver=resolver)
+        return await resolve_and_validate_url(url, resolver=resolver)
+    ingestion_module.resolve_and_validate_url = validate
+
+    async def capture(url):
+        await validate(url)
         captures.append(url)
         return BrowserCapture(url, url + 'final', f'Страница {len(captures)}', 'Описание страницы',
                               f'Контент snapshot {len(captures)}. {PAYLOAD}', buffer.getvalue(), {'text_truncated': True})
@@ -103,7 +108,7 @@ def fake_boundaries():
     return buffer.getvalue(), captures
 
 
-def run_browser(origin, png, captures):
+def run_browser(origin, png, captures, *, source_race_only=False):
     from playwright.sync_api import sync_playwright, expect
     import pymupdf
 
@@ -385,22 +390,63 @@ def run_browser(origin, png, captures):
         # Artificially delayed A, fast B: release A only after B is active.
         def race_selection(url, first, second, first_action, second_action, active_id, expected_id, assert_view):
             held = []
+            trace = {'expected': {active_id: expected_id}, 'first': first, 'second': second, 'requests': []}
+            def observe(request):
+                if request.url.startswith(origin + '/api/v2/'):
+                    trace['requests'].append({'method': request.method, 'path': request.url.removeprefix(origin)})
+            page.on('request', observe)
+            page.evaluate("""async () => {
+                const {state} = await import('/static/js/state.js');
+                window.selectionRaceTrace = [];
+                window.selectionRaceState = () => ({
+                    activeCompetitorId: state.activeCompetitorId, activeSourceId: state.activeSourceId,
+                    detailSourceId: state.activeSourceDetail?.source.id || null,
+                    sourceVersion: state.sourceVersion, competitorVersion: state.competitorVersion,
+                    loading: [...state.loading],
+                    sourceOrder: (state.activeCompetitorDetail?.sources || []).map(source => source.id)
+                });
+                if (window.selectionRaceListener) document.removeEventListener('click', window.selectionRaceListener, true);
+                window.selectionRaceListener = event => {
+                    const card = event.target.closest('.source-card, .competitor-card');
+                    if (!card) return;
+                    const kind = card.classList.contains('source-card') ? 'source' : 'competitor';
+                    const index = [...card.parentElement.children].indexOf(card);
+                    window.selectionRaceTrace.push({event: 'click', kind, index, ...window.selectionRaceState()});
+                    queueMicrotask(() => window.selectionRaceTrace.push({event: 'after-click', kind, index, ...window.selectionRaceState()}));
+                };
+                document.addEventListener('click', window.selectionRaceListener, true);
+            }""")
             def hold(route):
                 held.append((route, route.fetch()))
             page.route(url, hold)
-            first_action()
-            page.wait_for_function("async () => (await import('/static/js/state.js')).state.loading.size > 0")
-            second_action()
-            page.wait_for_function(f"async () => (await import('/static/js/state.js')).state.{active_id} === {json.dumps(expected_id)}")
-            # Wait for B's detail, without waiting for the intentionally held A.
-            assert_view()
-            assert held, (first, second)
-            for route, response in held:
-                route.fulfill(response=response)
-            page.unroute(url, hold)
-            settle()
-            assert page.evaluate(f"async () => (await import('/static/js/state.js')).state.{active_id}") == expected_id
-            assert_view()
+            try:
+                first_action()
+                page.wait_for_function("async () => (await import('/static/js/state.js')).state.loading.size > 0")
+                second_action()
+                page.wait_for_function(f"async () => (await import('/static/js/state.js')).state.{active_id} === {json.dumps(expected_id)}")
+                # Wait for B's detail, without waiting for the intentionally held A.
+                assert_view()
+                assert held, (first, second)
+                trace['before_release'] = page.evaluate('window.selectionRaceState()')
+                for route, response in held:
+                    route.fulfill(response=response)
+                page.unroute(url, hold)
+                settle()
+                trace['actual'] = page.evaluate('window.selectionRaceState()')
+                assert trace['actual'][active_id] == expected_id, trace
+                if active_id == 'activeSourceId':
+                    assert trace['actual']['detailSourceId'] == expected_id, trace
+                    assert trace['actual']['sourceVersion'] == trace['before_release']['sourceVersion'], trace
+                assert_view()
+                trace['result'] = 'PASS'
+            finally:
+                trace.setdefault('result', 'FAIL')
+                trace['final_state'] = page.evaluate('window.selectionRaceState()')
+                trace['clicks'] = page.evaluate('window.selectionRaceTrace')
+                page.remove_listener('request', observe)
+                evidence = ROOT / '.pytest-temp/race-artifacts'
+                evidence.mkdir(parents=True, exist_ok=True)
+                (evidence / f'{os.getpid()}-{active_id}.json').write_text(json.dumps(trace, indent=2), encoding='utf-8')
 
         race_selection(f'{origin}/api/v2/competitors/{alpha}', alpha, beta,
                        lambda: page.locator('#competitor-list .competitor-card').nth(0).click(),
@@ -414,6 +460,14 @@ def run_browser(origin, png, captures):
                        lambda: page.locator('#source-list .source-card').last.click(),
                        'activeSourceId', url_id,
                        lambda: expect(page.locator('#source-preview')).to_contain_text('Страница 2'))
+
+        if source_race_only:
+            assert not errors and not external and not failed and not bad_assets, (errors, external, failed, bad_assets)
+            assert all(expected_http_diagnostic(entry) for entry in console_errors), console_errors
+            print('EXACT_SOURCE_SELECTION_RACE_PASS; unexpected console/page/network errors=0', flush=True)
+            context.close()
+            browser.close()
+            return
 
         phase = 'current snapshot empty'
         # Current snapshot with no analysis must not use historical analysis.
@@ -568,7 +622,7 @@ def run_browser(origin, png, captures):
         browser.close()
 
 
-def main():
+def main(*, source_race_only=False):
     before = filesystem()
     runtime_root = ROOT / '.pytest-runtime'
     runtime_root.mkdir(exist_ok=True)
@@ -592,7 +646,10 @@ def main():
                 while not server.started and thread.is_alive() and monotonic() < deadline:
                     sleep(.05)
                 assert server.started, 'Local server did not start'
-                run_browser(f'http://127.0.0.1:{port}', png, captures)
+                if source_race_only:
+                    run_browser(f'http://127.0.0.1:{port}', png, captures, source_race_only=True)
+                else:
+                    run_browser(f'http://127.0.0.1:{port}', png, captures)
             finally:
                 server.should_exit = True
                 thread.join(timeout=15)
@@ -606,4 +663,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--source-race', action='store_true', help='Run the exact smoke setup through source-selection race, then stop')
+    main(source_race_only=parser.parse_args().source_race)

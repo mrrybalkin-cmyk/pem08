@@ -38,9 +38,9 @@ export function render(actions) {
         card.setAttribute('aria-pressed', String(source.id === state.activeSourceId));
         const busy = state.loading.has(`source:${source.id}`);
         card.append(el('span', sourceLabels[source.source_type], `badge source-type source-type-${source.source_type}`), el('strong', source.label),
-            el('small', source.original_filename || safeUrl(source.url)?.hostname || 'Ручной ввод', 'muted'),
+            el('small', source.original_filename || source.url || 'Ручной ввод', 'muted'),
             el('small', date(currentSnapshot(detail)?.captured_at || source.created_at), 'muted'),
-            el('small', busy ? 'Обрабатывается…' : detail ? currentAnalyses(detail).length ? 'Проанализирован' : 'Требуется анализ' : detail === null ? 'Состояние недоступно · выберите источник для повтора' : 'Загрузка состояния…', `source-status ${busy ? 'status-busy' : detail && currentAnalyses(detail).length ? 'status-ready' : detail ? 'status-pending' : ''}`));
+            el('small', busy ? 'Обрабатывается…' : detail ? source.source_type === 'url' && !currentSnapshot(detail) ? 'Не удалось получить страницу' : currentAnalyses(detail).length ? 'Проанализирован' : 'Требуется анализ' : detail === null ? 'Состояние недоступно · выберите источник для повтора' : 'Загрузка состояния…', `source-status ${busy ? 'status-busy' : detail && currentAnalyses(detail).length ? 'status-ready' : detail ? 'status-pending' : ''}`));
         $('source-list').append(card);
     }
     renderPreview(actions);
@@ -61,12 +61,13 @@ function renderPreview(actions) {
     root.append(el('h3', source.label));
     const busy = state.loading.has(`source:${source.id}`);
     const controls = el('div', null, 'actions');
-    controls.append(button('Повторить анализ', () => actions.sourceOperation('reanalyze'), busy));
-    if (source.source_type === 'url') controls.append(button('Обновить страницу', () => actions.sourceOperation('refresh'), busy));
+    if (snapshot) controls.append(button('Повторить анализ', () => actions.sourceOperation('reanalyze'), busy));
+    if (source.source_type === 'url') controls.append(button(snapshot ? 'Обновить страницу' : 'Повторить получение', () => actions.sourceOperation('refresh'), busy));
+    if (source.source_type === 'url' && !snapshot) controls.append(button('Загрузить скриншот', actions.screenshotFallback, busy));
     controls.append(button('Удалить источник', actions.deleteSource, busy, 'danger'));
     root.append(controls);
     if (busy) root.append(el('p', 'Запрос выполняется · подготовка, анализ и сохранение на сервере…', 'notice'));
-    if (!snapshot) { root.append(empty('Snapshot отсутствует', 'Содержимое источника пока недоступно.')); return; }
+    if (!snapshot) { root.append(link(source.url), empty('Источник добавлен, но содержимое пока не получено.', 'Повторите получение страницы или добавьте скриншот как отдельный источник.')); return; }
     root.append(el('p', `Захвачено: ${date(snapshot.captured_at)}`, 'muted'));
     if (source.source_type === 'url') {
         root.append(link(snapshot.final_url || source.url), el('h4', snapshot.title || 'Заголовок отсутствует'), el('p', snapshot.meta_description || 'Описание отсутствует'));

@@ -15,7 +15,7 @@ def test_root_is_module_workspace_and_assets_load(app):
         assert 'lang="ru"' in html
         for pane in ("competitors-pane", "sources-pane", "analysis-pane"):
             assert f'id="{pane}"' in html
-        assert 'type="module" src="/static/js/app.js?v=capture-recovery-20261006"' in html
+        assert 'type="module" src="/static/js/app.js?v=source-lifecycle-20261007"' in html
         assert response.headers['cache-control'] == 'no-cache, max-age=0, must-revalidate'
         assert '/static/app.js' not in html
         assert 'data-tab="text"' not in html

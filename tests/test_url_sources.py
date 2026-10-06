@@ -22,6 +22,13 @@ def url_api(source_api, tmp_path, monkeypatch):
                              "Visible website content", image_bytes(), {"text_truncated": False, "requested_url": "https://public.example/"})
     api.capture = AsyncMock(return_value=capture)
     monkeypatch.setattr(browser_service, "capture", api.capture)
+    from backend.security.url_validation import resolve_and_validate_url
+    from backend.services import ingestion_service as ingestion_module
+    async def validate(url):
+        async def resolver(hostname, _port):
+            return ('10.0.0.1',) if hostname == 'private-dns.example' else ('93.184.216.34',)
+        return await resolve_and_validate_url(url, resolver=resolver)
+    monkeypatch.setattr(ingestion_module, 'resolve_and_validate_url', validate)
     api.screenshots = settings.screenshot_dir
     return api
 
@@ -33,6 +40,26 @@ def upload(api):
 def counts(api):
     with api.sessions() as db:
         return tuple(db.query(model).count() for model in (Source, SourceSnapshot, Analysis))
+
+
+def test_source_is_committed_before_capture_starts(url_api):
+    api = url_api
+    capture = api.capture.return_value
+    observed = []
+    async def inspect(url):
+        assert counts(api) == (1, 0, 0)
+        with api.sessions() as db:
+            saved = db.query(Source).one()
+            assert saved.url == url == 'https://public.example/'
+            observed.append(saved.id)
+        api.boundary.assert_not_awaited()
+        return capture
+    api.capture.side_effect = inspect
+    response = upload(api)
+    assert response.status_code == 201
+    assert response.json()['source']['id'] == observed[0]
+    assert response.json()['processing_status'] == 'ready'
+    assert counts(api) == (1, 1, 1)
 
 
 def test_url_create_refresh_reanalyze_and_all_snapshot_cleanup(url_api):
@@ -93,8 +120,7 @@ def test_url_ai_failure_retry_without_browser(url_api, refresh):
     assert counts(api) == (1, 2 if refresh else 1, 2 if refresh else 1)
 
 
-@pytest.mark.parametrize("refresh", [False, True])
-@pytest.mark.parametrize("commit_number", [1, 2])
+@pytest.mark.parametrize("refresh,commit_number", [(False, 1), (False, 2), (False, 3), (True, 1), (True, 2)])
 def test_url_commit_failure_cleanup_and_retryable_state(url_api, monkeypatch, refresh, commit_number):
     api = url_api
     detail = upload(api).json() if refresh else None
@@ -109,9 +135,11 @@ def test_url_commit_failure_cleanup_and_retryable_state(url_api, monkeypatch, re
     monkeypatch.setattr(Session, "commit", commit)
     response = api.client.post(f"/api/v2/sources/{detail['source']['id']}/refresh") if refresh else upload(api)
     assert response.status_code == 500
-    base = 1 if refresh else 0
-    assert counts(api) == (1 if refresh or commit_number == 2 else 0, base + commit_number - 1, base)
-    assert len(list(api.screenshots.glob("*"))) == base + commit_number - 1
+    snapshot_count = commit_number if refresh else max(0, commit_number - 2)
+    assert counts(api) == (1 if refresh or commit_number > 1 else 0, snapshot_count, int(refresh))
+    assert len(list(api.screenshots.glob("*"))) == snapshot_count
+    if not refresh and commit_number == 1:
+        api.capture.assert_not_awaited()
     if refresh and commit_number == 1:
         assert api.client.get(f"/api/v2/sources/{detail['source']['id']}").json() == detail
 
@@ -123,8 +151,11 @@ def test_capture_failure_preserves_old_state(url_api, refresh, failure, status):
     detail = upload(api).json() if refresh else None
     api.capture.side_effect = failure
     response = api.client.post(f"/api/v2/sources/{detail['source']['id']}/refresh") if refresh else upload(api)
-    assert response.status_code == status
-    assert counts(api) == ((1, 1, 1) if refresh else (0, 0, 0))
+    assert response.status_code == 201
+    result = response.json()
+    assert result['processing_error']['code'] == ('BROWSER_TIMEOUT' if status == 504 else 'BROWSER_ERROR')
+    assert result['processing_status'] == ('ready' if refresh else 'capture_failed')
+    assert counts(api) == ((1, 1, 1) if refresh else (1, 0, 0))
     assert len(list(api.screenshots.glob("*"))) == (1 if refresh else 0)
 
 
@@ -142,17 +173,20 @@ def test_initial_perplexity_capture_failure_then_retry(url_api, failure, status,
     path = f'/api/v2/competitors/{cid}/sources/url'
     api.capture.side_effect = failure
     failed = api.client.post(path, json={'url': url})
-    assert failed.status_code == status and failed.json()['error']['code'] == code
-    assert counts(api) == (0, 0, 0)
+    assert failed.status_code == 201 and failed.json()['processing_error']['code'] == code
+    assert failed.json()['processing_status'] == 'capture_failed'
+    sid = failed.json()['source']['id']
+    assert counts(api) == (1, 0, 0)
     api.boundary.assert_not_awaited()
     detail = api.client.get(f'/api/v2/competitors/{cid}').json()
-    assert detail['website_url'] == url and detail['sources'] == []
+    assert detail['website_url'] == url and detail['sources'][0]['id'] == sid
     with api.sessions() as db:
         assert db.query(Competitor).filter_by(name='Perplexity AI').count() == 1
     api.capture.side_effect = None
     api.capture.return_value = BrowserCapture(url, url, 'Perplexity', None, 'Mocked public page', image_bytes(), {})
-    retried = api.client.post(path, json={'url': url})
+    retried = api.client.post(f'/api/v2/sources/{sid}/refresh')
     assert retried.status_code == 201
+    assert retried.json()['source']['id'] == sid and retried.json()['processing_status'] == 'ready'
     assert counts(api) == (1, 1, 1)
     assert len(api.client.get(f'/api/v2/competitors/{cid}').json()['sources']) == 1
 
@@ -254,23 +288,23 @@ async def test_url_cancellation_semantics(url_api, during):
     with api.sessions() as db:
         with pytest.raises(asyncio.CancelledError):
             await ingestion_service.ingest_url(db, api.competitor_id, UrlSourceCreate(url="https://public.example"))
-    assert counts(api) == ((0, 0, 0) if during == "capture" else (1, 1, 0))
+    assert counts(api) == ((1, 0, 0) if during == "capture" else (1, 1, 0))
     assert len(list(api.screenshots.glob("*"))) == (0 if during == "capture" else 1)
 
 
-def test_url_screenshot_write_failure_no_persistence(url_api, monkeypatch):
+def test_url_screenshot_write_failure_preserves_source(url_api, monkeypatch):
     from backend.services.storage_service import ScreenshotStorage
     def fail(*args):
         raise OSError("injected write failure")
     monkeypatch.setattr(ScreenshotStorage, "save", fail)
     assert upload(url_api).status_code == 500
-    assert counts(url_api) == (0, 0, 0)
+    assert counts(url_api) == (1, 0, 0)
     url_api.boundary.assert_not_awaited()
     assert not list(url_api.screenshots.glob("*"))
 
 
 @pytest.mark.asyncio
-async def test_url_cancel_before_initial_commit_cleans_screenshot(url_api, monkeypatch):
+async def test_url_cancel_before_snapshot_commit_preserves_source(url_api, monkeypatch):
     from threading import Event
     from backend.repositories import sources
     entered, release = Event(), Event()
@@ -289,6 +323,68 @@ async def test_url_cancel_before_initial_commit_cleans_screenshot(url_api, monke
         release.set()
         with pytest.raises(asyncio.CancelledError):
             await task
-    assert counts(url_api) == (0, 0, 0)
+    assert counts(url_api) == (1, 0, 0)
     assert not list(url_api.screenshots.glob("*"))
     url_api.boundary.assert_not_awaited()
+
+
+def test_failed_url_survives_fresh_application_and_deletes_normally(url_api):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from sqlalchemy import create_engine
+    from backend.api.sources import router as source_router
+    from backend.api.competitors import router as competitor_router
+    from backend.database import get_db
+    api = url_api
+    api.capture.side_effect = BrowserCaptureError('HTTP 403')
+    result = upload(api).json()
+    sid = result['source']['id']
+    with api.sessions() as db:
+        database_url = db.get_bind().url
+    engine = create_engine(database_url)
+    try:
+        # Fresh application + fresh engine: no original session or UI/service cache.
+        restarted_app = FastAPI()
+        restarted_app.include_router(source_router)
+        restarted_app.include_router(competitor_router)
+        def reopened_db():
+            with Session(engine) as db:
+                yield db
+        restarted_app.dependency_overrides[get_db] = reopened_db
+        with TestClient(restarted_app) as restarted:
+            restored = restarted.get(f'/api/v2/sources/{sid}').json()
+            assert restored['processing_status'] == 'capture_failed'
+            assert restored['source']['url'] == 'https://public.example/'
+            assert restored['snapshots'] == [] and restored['analyses'] == []
+            assert restarted.get(f'/api/v2/competitors/{api.competitor_id}').json()['sources'][0]['id'] == sid
+    finally:
+        engine.dispose()
+    assert api.client.delete(f'/api/v2/sources/{sid}').status_code == 204
+    assert api.client.get(f'/api/v2/sources/{sid}').status_code == 404
+    assert counts(api) == (0, 0, 0)
+
+
+def test_dns_ssrf_rejected_before_source_persistence(url_api):
+    api = url_api
+    response = api.client.post(f'/api/v2/competitors/{api.competitor_id}/sources/url', json={'url': 'https://private-dns.example/'})
+    assert response.status_code == 400 and response.json()['error']['code'] == 'URL_BLOCKED_PRIVATE_NETWORK'
+    assert counts(api) == (0, 0, 0)
+    api.capture.assert_not_awaited()
+    api.boundary.assert_not_awaited()
+
+
+def test_aggregate_omits_failed_url_evidence(url_api, monkeypatch):
+    from backend.services.ai_service import ai_service
+    api = url_api
+    aggregate = AsyncMock(return_value=api.boundary.return_value)
+    monkeypatch.setattr(ai_service, 'aggregate_competitor', aggregate)
+    api.capture.side_effect = BrowserCaptureError('HTTP 403')
+    failed = upload(api).json()['source']['id']
+    root = f'/api/v2/competitors/{api.competitor_id}'
+    assert api.client.post(root + '/aggregate-analysis').status_code == 400
+    aggregate.assert_not_awaited()
+    ready = api.client.post(root + '/sources/text', json={'text': 'Successfully analyzed evidence.'}).json()['source']['id']
+    assert api.client.post(root + '/aggregate-analysis').status_code == 201
+    prepared = aggregate.await_args.args[0]
+    assert [item.source_id for item in prepared.sources] == [ready]
+    assert prepared.coverage.omitted_source_ids == (failed,)
