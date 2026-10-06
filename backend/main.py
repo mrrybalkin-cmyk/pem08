@@ -43,6 +43,9 @@ async def log_requests(request: Request, call_next):
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['Referrer-Policy'] = 'no-referrer'
     response.headers['X-Frame-Options'] = 'DENY'
+    if request.method in {'GET', 'HEAD'} and (request.url.path == '/' or request.url.path.startswith('/static/')):
+        # Revalidate HTML/modules on navigation; do not reuse an old onboarding UI.
+        response.headers['Cache-Control'] = 'no-cache, max-age=0, must-revalidate'
     return response
 
 

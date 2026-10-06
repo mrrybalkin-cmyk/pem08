@@ -15,7 +15,8 @@ def test_root_is_module_workspace_and_assets_load(app):
         assert 'lang="ru"' in html
         for pane in ("competitors-pane", "sources-pane", "analysis-pane"):
             assert f'id="{pane}"' in html
-        assert 'type="module" src="/static/js/app.js"' in html
+        assert 'type="module" src="/static/js/app.js?v=initial-source-cohere-20261006"' in html
+        assert response.headers['cache-control'] == 'no-cache, max-age=0, must-revalidate'
         assert '/static/app.js' not in html
         assert 'data-tab="text"' not in html
         assert "fonts.googleapis" not in html
@@ -24,6 +25,16 @@ def test_root_is_module_workspace_and_assets_load(app):
             result = client.get(f'/static/js/{module.name}')
             assert result.status_code == 200
             assert 'javascript' in result.headers['content-type']
+            assert result.headers['cache-control'] == 'no-cache, max-age=0, must-revalidate'
+
+
+def test_module_cache_revalidation_keeps_policy_on_304(app):
+    with TestClient(app) as client:
+        response = client.get('/static/js/app.js')
+        cached = client.get('/static/js/app.js', headers={'If-None-Match': response.headers['etag']})
+        assert cached.status_code == 304
+        assert cached.headers['cache-control'] == 'no-cache, max-age=0, must-revalidate'
+        assert 'cache-control' not in client.get('/api/v2/competitors').headers
 
 
 def test_v2_modules_have_single_fetch_boundary_and_no_html_sinks():

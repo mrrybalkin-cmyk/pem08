@@ -173,7 +173,7 @@ function openForm(kind, sourceType = 'text') {
         if (kind === 'create') {
             const input = field('initial_source', 'Первый источник (необязательно)', '', { multiline: true, max: 30000 });
             input.placeholder = 'https://example.com/ или текст о конкуренте';
-            const hint = el('p', 'Вставьте URL сайта или текст о конкуренте. Источник будет добавлен автоматически.', 'muted');
+            const hint = el('p', 'Вставьте URL сайта или текст. Источник будет добавлен и проанализирован автоматически.', 'muted');
             hint.id = 'initial-source-hint';
             input.setAttribute('aria-describedby', hint.id);
             input.after(hint);
@@ -269,6 +269,11 @@ async function submitForm(event) {
         if (modal.kind !== 'source') {
             const payload = { name: values.name.trim(), ...Object.fromEntries(['website_url', 'niche', 'notes'].map(key => [key, values[key]?.trim() || null])) };
             if (modal.kind === 'create') {
+                const value = values.initial_source.trim();
+                // One URL supplies both the profile link and the initial source.
+                try {
+                    if (value && initialSourceType(value) === 'url') payload.website_url = value;
+                } catch { /* Initial-source validation is reported after competitor creation. */ }
                 if (!modal.createdCompetitorId) {
                     result = await api.post('/competitors', payload);
                     modal.createdCompetitorId = result.id;
@@ -276,7 +281,6 @@ async function submitForm(event) {
                     await selectCompetitor(result.id);
                 }
                 result = { id: modal.createdCompetitorId };
-                const value = values.initial_source.trim();
                 if (value || modal.initialSourceId || modal.sourceAttempted) {
                     $('form-status').textContent = 'Конкурент создан. Источник отправляется · сервер подготовит контент, выполнит анализ и сохранит результат…';
                     const detail = await initialSource(modal, value);
