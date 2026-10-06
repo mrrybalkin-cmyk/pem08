@@ -247,12 +247,13 @@ def run_browser(origin, png, captures):
             page.get_by_role('button', name='Повторить анализ', exact=True).click()
         settle()
         expect(page.locator('#analysis-history option')).to_have_count(2)
-        page.locator('#aggregate').click()
+        page.get_by_role('button', name='Проанализировать конкурента', exact=True).click()
         settle()
         expect(page.locator('#analysis-content h2')).to_have_text('Сводный анализ')
         expect(page.locator('.report-context .mode-badge')).to_have_text('Сводный анализ конкурента')
         aggregate_calls = sum('/aggregate-analysis' in url for _, url, _ in requests)
-        page.locator('#latest-aggregate').click()
+        page.get_by_role('button', name='Открыть последний анализ', exact=True).click()
+        settle()
         assert sum('/aggregate-analysis' in url for _, url, _ in requests) == aggregate_calls
 
         # Real native multipart uploads and backend file preparation for image and PDF.
@@ -303,7 +304,7 @@ def run_browser(origin, png, captures):
         beta_source = text_source('Beta text', 'Контролируемый текст для Beta')
         page.locator('#aggregate').click()
         settle()
-        page.locator('#open-compare').click()
+        page.get_by_role('button', name='Сравнить конкурентов', exact=True).click()
         expect(page.locator('#comparison-result')).to_contain_text('Выберите от 2 до 5')
         expect(page.locator('#compare-submit')).to_be_disabled()
         page.locator('#compare-choices input').nth(0).check()
@@ -466,6 +467,12 @@ def run_browser(origin, png, captures):
         for label, width, height in [('desktop', 1440, 900), ('tablet', 1024, 768), ('mobile', 390, 844)]:
             page.set_viewport_size({'width': width, 'height': height})
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), label
+            for button_id, name in [('aggregate', 'Проанализировать конкурента'),
+                                    ('latest-aggregate', 'Открыть последний анализ'),
+                                    ('open-compare', 'Сравнить конкурентов')]:
+                control = page.get_by_role('button', name=name, exact=True)
+                expect(control).to_have_attribute('id', button_id)
+                assert control.evaluate('button => button.scrollWidth <= button.clientWidth'), (label, button_id)
             for selector in ['#new-competitor', '#add-source', '#aggregate', '#open-compare']:
                 page.locator(selector).scroll_into_view_if_needed()
                 expect(page.locator(selector)).to_be_visible()
@@ -491,6 +498,8 @@ def run_browser(origin, png, captures):
             assert box['x'] >= 0 and box['x'] + box['width'] <= width + 1 and box['height'] <= height, (label, box)
             page.locator('#form-cancel').click()
             page.locator('#analysis-pane').scroll_into_view_if_needed()
+            page.locator('#aggregate').scroll_into_view_if_needed()
+            page.screenshot(path=str(artifacts / f'{label}-analysis-toolbar.png'), full_page=False)
             page.screenshot(path=str(artifacts / f'{label}.png'), full_page=True)
 
         phase = 'deletions'

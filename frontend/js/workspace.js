@@ -44,7 +44,7 @@ export function render(actions) {
         $('source-list').append(card);
     }
     renderPreview(actions);
-    $('aggregate').textContent = state.loading.has(`aggregate:${state.activeCompetitorId}`) ? 'Сводный анализ выполняется…' : 'Сводный анализ';
+    $('aggregate').textContent = state.loading.has(`aggregate:${state.activeCompetitorId}`) ? 'Сводный анализ выполняется…' : 'Проанализировать конкурента';
     $('aggregate').disabled ||= state.loading.has(`aggregate:${state.activeCompetitorId}`);
     renderAnalysis(actions);
     renderCompare(actions);
