@@ -88,6 +88,10 @@ def fake_boundaries():
     Image.new('RGB', (160, 100), '#22425a').save(buffer, format='PNG')
 
     async def capture(url):
+        from backend.security.url_validation import resolve_and_validate_url
+        async def resolver(hostname, _port):
+            return ('10.0.0.1',) if hostname == 'private-dns.example' else ('93.184.216.34',)
+        await resolve_and_validate_url(url, resolver=resolver)
         captures.append(url)
         return BrowserCapture(url, url + 'final', f'Страница {len(captures)}', 'Описание страницы',
                               f'Контент snapshot {len(captures)}. {PAYLOAD}', buffer.getvalue(), {'text_truncated': True})
@@ -559,6 +563,8 @@ def run_browser(origin, png, captures):
         print('aggregate-not-ready/comparison-not-ready/console audit/loading/duplicate submit/errors/competitor race/source race/mutation race/current snapshot/XSS/empty states/2-5 selection PASS')
         print(f'Screenshots: {artifacts}')
         context.close()
+        from tests.browser_initial_source import run_onboarding
+        run_onboarding(browser, origin, png, captures)
         browser.close()
 
 

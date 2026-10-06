@@ -166,10 +166,18 @@ function openForm(kind, sourceType = 'text') {
     $('form-error').textContent = '';
     $('form-status').textContent = '';
     $('form-submit').disabled = false;
+    $('form-submit').textContent = 'Сохранить';
     $('editor-title').textContent = kind === 'create' ? 'Новый конкурент' : kind === 'edit' ? 'Изменить конкурента' : 'Добавить источник';
     if (kind !== 'source') {
         field('name', 'Название', kind === 'edit' ? competitor.name : '', { required: true, max: 120 });
-        field('website_url', 'Сайт (необязательно)', kind === 'edit' ? competitor.website_url : '', { type: 'url' });
+        if (kind === 'create') {
+            const input = field('initial_source', 'Первый источник (необязательно)', '', { multiline: true, max: 30000 });
+            input.placeholder = 'https://example.com/ или текст о конкуренте';
+            const hint = el('p', 'Вставьте URL сайта или текст о конкуренте. Источник будет добавлен автоматически.', 'muted');
+            hint.id = 'initial-source-hint';
+            input.setAttribute('aria-describedby', hint.id);
+            input.after(hint);
+        } else field('website_url', 'Сайт (необязательно)', competitor.website_url, { type: 'url' });
         field('niche', 'Ниша (необязательно)', kind === 'edit' ? competitor.niche : '', { max: 160 });
         field('notes', 'Заметки (необязательно)', kind === 'edit' ? competitor.notes : '', { multiline: true, max: 2000 });
     } else {
@@ -189,10 +197,65 @@ function openForm(kind, sourceType = 'text') {
     if (!$('editor-dialog').open) $('editor-dialog').showModal();
 }
 
+// Both entry points use the same ingestion request and server validation.
+async function ingestSource(competitorId, sourceType, values) {
+    const prefix = `${competitorPath(competitorId)}/sources`;
+    const label = values.label.trim();
+    if (sourceType === 'file') {
+        const payload = new FormData();
+        payload.append('file', values.file);
+        if (label) payload.append('label', label);
+        return api.post(`${prefix}/file`, payload);
+    }
+    return api.post(`${prefix}/${sourceType}`, {
+        ...(label ? { label } : {}), [sourceType === 'text' ? 'text' : 'url']: sourceType === 'text' ? values.text : values.url.trim(),
+    });
+}
+
+function initialSourceType(value) {
+    // URL-shaped input must never silently become text and bypass URL checks.
+    if (/^[a-z][a-z\d+.-]*:\/|^https?:/i.test(value)) {
+        let url;
+        try { url = new URL(value); } catch { throw new Error('Введите корректный URL http:// или https://.'); }
+        if (!/^https?:\/\//i.test(value) || !['http:', 'https:'].includes(url.protocol) || /\s/.test(value)) {
+            throw new Error('Введите корректный URL http:// или https://.');
+        }
+        return 'url'; // SSRF, credentials, ports and DNS are still checked by ingestion.
+    }
+    return 'text';
+}
+
+async function initialSource(modal, value) {
+    if (modal.sourceAttempted) {
+        // Reconcile partial persistence before permitting any retry.
+        const detail = await api.get(competitorPath(modal.createdCompetitorId));
+        if (!modal.initialSourceId && detail.sources.length === 1) modal.initialSourceId = detail.sources[0].id;
+        if (!modal.initialSourceId && (modal.sourceUncertain || detail.sources.length)) {
+            throw new Error('Результат отправки источника пока неизвестен. Закройте форму и проверьте список источников; повторная отправка заблокирована, чтобы избежать дубликатов.');
+        }
+        if (modal.initialSourceId) {
+            const saved = await api.get(sourcePath(modal.initialSourceId));
+            if (currentAnalyses(saved).length) return saved;
+            if (modal.sourceUncertain) throw new Error('Источник сохранён, но результат обработки пока неизвестен. Проверьте его в списке источников перед повторным анализом.');
+            return api.post(`${sourcePath(modal.initialSourceId)}/reanalyze`);
+        }
+    }
+    const sourceType = initialSourceType(value);
+    modal.sourceAttempted = true;
+    try {
+        const result = await ingestSource(modal.createdCompetitorId, sourceType, { label: '', text: value, url: value });
+        modal.initialSourceId = result.source.id;
+        return result;
+    } catch (error) {
+        modal.sourceUncertain = error.status === 0 || error.code === 'INVALID_RESPONSE';
+        throw error;
+    }
+}
+
 async function submitForm(event) {
     event.preventDefault();
     if (state.loading.has('form') || !state.modal) return;
-    const modal = { ...state.modal };
+    const modal = state.modal;
     const data = new FormData($('editor-form'));
     const values = Object.fromEntries(data);
     if (modal.kind !== 'source' && !values.name.trim()) { $('form-error').textContent = 'Введите название.'; return; }
@@ -204,27 +267,47 @@ async function submitForm(event) {
     let result;
     try {
         if (modal.kind !== 'source') {
-            const payload = { name: values.name.trim(), ...Object.fromEntries(['website_url', 'niche', 'notes'].map(key => [key, values[key].trim() || null])) };
-            result = modal.kind === 'create' ? await api.post('/competitors', payload) : await api.patch(competitorPath(modal.competitorId), payload);
+            const payload = { name: values.name.trim(), ...Object.fromEntries(['website_url', 'niche', 'notes'].map(key => [key, values[key]?.trim() || null])) };
+            if (modal.kind === 'create') {
+                if (!modal.createdCompetitorId) {
+                    result = await api.post('/competitors', payload);
+                    modal.createdCompetitorId = result.id;
+                    await loadList();
+                    await selectCompetitor(result.id);
+                }
+                result = { id: modal.createdCompetitorId };
+                const value = values.initial_source.trim();
+                if (value || modal.initialSourceId || modal.sourceAttempted) {
+                    $('form-status').textContent = 'Конкурент создан. Источник отправляется · сервер подготовит контент, выполнит анализ и сохранит результат…';
+                    const detail = await initialSource(modal, value);
+                    await selectCompetitor(modal.createdCompetitorId, detail.source.id);
+                    await loadList();
+                }
+            } else result = await api.patch(competitorPath(modal.competitorId), payload);
         } else {
-            const prefix = `${competitorPath(modal.competitorId)}/sources`;
-            const label = values.label.trim();
-            if (modal.sourceType === 'file') {
-                const payload = new FormData();
-                payload.append('file', values.file);
-                if (label) payload.append('label', label);
-                result = await api.post(`${prefix}/file`, payload);
-            } else result = await api.post(`${prefix}/${modal.sourceType}`, {
-                ...(label ? { label } : {}), [modal.sourceType === 'text' ? 'text' : 'url']: modal.sourceType === 'text' ? values.text : values.url.trim(),
-            });
+            result = await ingestSource(modal.competitorId, modal.sourceType, values);
         }
         state.loading.delete('form');
         closeForm();
-        if (modal.kind === 'create') { await loadList(); await selectCompetitor(result.id); }
-        else await reloadActive(modal.competitorId, modal.competitorVersion, modal.sourceVersion, result.source?.id || state.activeSourceId);
+        if (modal.kind !== 'create') await reloadActive(modal.competitorId, modal.competitorVersion, modal.sourceVersion, result.source?.id || state.activeSourceId);
     } catch (error) {
         $('form-error').textContent = message(error);
         $('form-status').textContent = '';
+        if (modal.kind === 'create' && modal.createdCompetitorId) {
+            try {
+                const detail = await api.get(competitorPath(modal.createdCompetitorId));
+                if (!modal.initialSourceId && modal.sourceAttempted && detail.sources.length === 1) modal.initialSourceId = detail.sources[0].id;
+                await selectCompetitor(modal.createdCompetitorId, modal.initialSourceId);
+                await loadList();
+            } catch { /* Keep the created competitor ID and the original error for retry. */ }
+            $('form-error').textContent = `Конкурент создан. Не удалось добавить или обработать первый источник: ${message(error)}`;
+            $('form-status').textContent = modal.sourceUncertain
+                ? 'Результат запроса неизвестен. Повтор проверит сохранённый источник; повторная отправка не выполняется.'
+                : modal.initialSourceId
+                ? 'Источник уже сохранён. Повтор использует этот источник и не создаёт новый.'
+                : 'Исправьте первый источник и повторите. Новый конкурент создан не будет.';
+            $('form-submit').textContent = modal.initialSourceId ? 'Повторить анализ' : 'Повторить добавление источника';
+        }
         // Ingestion persists retryable sources before AI; refresh without closing the form.
         if (modal.kind === 'source') {
             try {
@@ -239,6 +322,10 @@ async function submitForm(event) {
     } finally {
         state.loading.delete('form');
         for (const control of $('editor-form').elements) control.disabled = false;
+        if (state.modal === modal && modal.createdCompetitorId) {
+            for (const name of ['name', 'niche', 'notes']) $(`field-${name}`).readOnly = true;
+            $('field-initial_source').readOnly = !!modal.initialSourceId || !!modal.sourceUncertain;
+        }
         redraw();
     }
 }

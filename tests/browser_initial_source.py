@@ -1,0 +1,310 @@
+"""Mocked onboarding regression, also invoked by the full browser smoke.
+
+python -m tests.browser_initial_source
+Uses the smoke harness's temporary DB, fake AI/capture and no .env.
+"""
+import json
+
+from tests import browser_ui_smoke as smoke
+
+
+def run_onboarding(browser, origin, png, captures):
+    from playwright.sync_api import expect
+    from backend.services.ai_service import ai_service, AIProviderError
+
+    artifacts = smoke.ROOT / '.pytest-temp/onboarding-artifacts'
+    artifacts.mkdir(parents=True, exist_ok=True)
+    context = browser.new_context(viewport={'width': 1440, 'height': 900})
+    page = context.new_page()
+    page.set_default_timeout(12000)
+    requests, errors, external, unexpected_http, console_errors = [], [], [], [], []
+    expected_http = set()
+    page.on('request', lambda request: requests.append((request.method, request.url)))
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    page.on('response', lambda response: unexpected_http.append((response.url, response.status))
+            if response.status >= 400 and (response.url, response.status) not in expected_http else None)
+    page.on('console', lambda msg: console_errors.append((msg.text, msg.location)) if msg.type == 'error' else None)
+
+    def guard(route):
+        if not route.request.url.startswith(origin + '/'):
+            external.append(route.request.url)
+            route.abort()
+        else:
+            route.continue_()
+
+    context.route('**/*', guard)
+
+    def settle():
+        page.wait_for_load_state('networkidle')
+        page.wait_for_function("async () => !(await import('/static/js/state.js')).state.loading.size")
+
+    def state_value(key):
+        return page.evaluate("async key => (await import('/static/js/state.js')).state[key]", key)
+
+    def detail(cid):
+        response = context.request.get(f'{origin}/api/v2/competitors/{cid}')
+        assert response.status == 200
+        return response.json()
+
+    def source(sid):
+        response = context.request.get(f'{origin}/api/v2/sources/{sid}')
+        assert response.status == 200
+        return response.json()
+
+    def open_create(name, value=''):
+        page.locator('#new-competitor').click()
+        expect(page.locator('#form-submit')).to_have_text('Сохранить')
+        page.get_by_label('Название', exact=True).fill(name)
+        page.get_by_label('Первый источник (необязательно)', exact=True).fill(value)
+        expect(page.locator('#field-initial_source')).to_have_attribute('aria-describedby', 'initial-source-hint')
+        expect(page.locator('#initial-source-hint')).to_have_text(
+            'Вставьте URL сайта или текст о конкуренте. Источник будет добавлен автоматически.')
+
+    def finish():
+        expect(page.locator('#editor-dialog')).not_to_be_visible()
+        settle()
+        return state_value('activeCompetitorId')
+
+    def creates():
+        return sum(method == 'POST' and url == origin + '/api/v2/competitors' for method, url in requests)
+
+    def capture(name):
+        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), name
+        assert page.locator('#editor-dialog').evaluate('dialog => dialog.scrollWidth <= dialog.clientWidth'), name
+        page.screenshot(path=str(artifacts / f'{name}.png'))
+
+    try:
+        page.goto(origin)
+        settle()
+        # A: name only; the existing source action remains enabled.
+        open_create('Onboarding name only')
+        page.locator('#form-submit').click()
+        cid = finish()
+        assert detail(cid)['sources'] == []
+        expect(page.locator('#add-source')).to_be_enabled()
+        page.locator('#add-source').click()
+        page.get_by_label('Текст (10–30 000 символов)', exact=True).fill('Первый источник добавлен вручную.')
+        page.locator('#form-submit').click()
+        finish()
+        assert len(detail(cid)['sources']) == 1
+
+        # B: automatic URL, then existing Add source creates a second Text source.
+        open_create('Onboarding URL', 'https://public.example/onboarding')
+        page.locator('#form-submit').click()
+        cid = finish()
+        first = detail(cid)['sources'][0]
+        assert first['source_type'] == 'url' and state_value('activeSourceId') == first['id']
+        expect(page.locator('.summary')).to_be_visible()
+        original = source(first['id'])
+        page.locator('#add-source').click()
+        page.get_by_label('Название источника', exact=True).fill('Второй источник')
+        page.get_by_label('Текст (10–30 000 символов)', exact=True).fill('Дополнительный текст о конкуренте.')
+        page.locator('#form-submit').click()
+        finish()
+        sources = detail(cid)['sources']
+        assert len(sources) == 2 and len({item['id'] for item in sources}) == 2
+        assert source(first['id']) == original, 'Initial source overwritten'
+        second = next(item for item in sources if item['id'] != first['id'])
+        assert second['source_type'] == 'text' and state_value('activeSourceId') == second['id']
+        for item in (first, second):
+            page.locator('.source-card').filter(has=page.locator('strong', has_text=item['label'])).click()
+            settle()
+            assert state_value('activeSourceId') == item['id']
+            expect(page.locator('.summary')).to_be_visible()
+        # Additional URL and file options are still the existing source dialog.
+        page.locator('#add-source').click()
+        page.get_by_role('button', name='URL', exact=True).click()
+        page.get_by_label('URL страницы', exact=True).fill('https://public.example/additional')
+        page.locator('#form-submit').click()
+        finish()
+        page.locator('#add-source').click()
+        page.get_by_role('button', name='Изображение / PDF', exact=True).click()
+        page.locator('input[type=file]').set_input_files({'name': 'additional.png', 'mimeType': 'image/png', 'buffer': png})
+        page.locator('#form-submit').click()
+        finish()
+        import pymupdf
+        with pymupdf.open() as document:
+            document.new_page().insert_text((50, 50), 'Additional PDF source')
+            pdf = document.tobytes()
+        page.locator('#add-source').click()
+        page.get_by_role('button', name='Изображение / PDF', exact=True).click()
+        page.locator('input[type=file]').set_input_files({'name': 'additional.pdf', 'mimeType': 'application/pdf', 'buffer': pdf})
+        page.locator('#form-submit').click()
+        finish()
+        sources = detail(cid)['sources']
+        assert len(sources) == 5 and len({item['id'] for item in sources}) == 5
+        assert {item['source_type'] for item in sources} == {'text', 'url', 'image', 'pdf'}
+        assert source(first['id']) == original
+
+        # C: plain text, including whitespace trimming, uses text ingestion.
+        text = 'Mistral AI develops generative AI models and services...'
+        open_create('Onboarding text', '  ' + text + '  ')
+        page.locator('#form-submit').click()
+        cid = finish()
+        sid = detail(cid)['sources'][0]['id']
+        assert source(sid)['source']['source_type'] == 'text'
+        assert source(sid)['snapshots'][0]['extracted_text'] == text
+        assert state_value('activeSourceId') == sid
+
+        # Invalid URL never becomes a text analysis; retry does not create a competitor.
+        before_creates = creates()
+        before_captures = len(captures)
+        open_create('Onboarding invalid URL', 'https://')
+        page.locator('#form-submit').click()
+        expect(page.locator('#form-error')).to_contain_text('Конкурент создан.')
+        settle()
+        cid = state_value('activeCompetitorId')
+        assert not detail(cid)['sources'] and len(captures) == before_captures
+        page.locator('#field-initial_source').fill('https://public.example/corrected')
+        page.locator('#form-submit').click()
+        finish()
+        assert creates() == before_creates + 1 and len(detail(cid)['sources']) == 1
+
+        # Server SSRF validation: private literal and private DNS resolution.
+        for index, value in enumerate(('http://127.0.0.1/', 'https://private-dns.example/')):
+            open_create(f'Onboarding SSRF {index}', value)
+            # Competitor ID is unknown until the first POST returns.
+            def expect_blocked(route):
+                expected_http.add((route.request.url, 400))
+                route.continue_()
+            page.route('**/sources/url', expect_blocked)
+            before_captures = len(captures)
+            page.locator('#form-submit').click()
+            expect(page.locator('#form-error')).to_contain_text('Этот адрес нельзя анализировать.')
+            settle()
+            cid = state_value('activeCompetitorId')
+            assert not detail(cid)['sources'] and len(captures) == before_captures
+            page.unroute('**/sources/url', expect_blocked)
+            page.locator('#form-cancel').click()
+
+        # Real partial persistence: fake provider fails after source/snapshot commit.
+        analyze = ai_service.analyze_source
+        async def fail(_prepared):
+            raise AIProviderError('injected onboarding failure')
+        ai_service.analyze_source = fail
+        open_create('Onboarding persisted failure', 'Текст сохраняется до ошибки анализа.')
+        def expect_provider_error(route):
+            expected_http.add((route.request.url, 502))
+            route.continue_()
+        page.route('**/sources/text', expect_provider_error)
+        before_creates = creates()
+        page.locator('#form-submit').click()
+        expect(page.locator('#form-error')).to_contain_text('Конкурент создан.')
+        settle()
+        ai_service.analyze_source = analyze
+        page.unroute('**/sources/text', expect_provider_error)
+        cid = state_value('activeCompetitorId')
+        saved = detail(cid)['sources']
+        assert len(saved) == 1 and not source(saved[0]['id'])['analyses']
+        expect(page.locator('#field-initial_source')).to_have_value('Текст сохраняется до ошибки анализа.')
+        expect(page.locator('#form-submit')).to_have_text('Повторить анализ')
+        page.locator('#form-submit').click()
+        finish()
+        assert creates() == before_creates + 1
+        assert [item['id'] for item in detail(cid)['sources']] == [saved[0]['id']]
+        assert len(source(saved[0]['id'])['analyses']) == 1
+
+        # Lost success response: reconciliation opens persisted result, never duplicates.
+        open_create('Onboarding lost response', 'Источник с потерянным ответом сервера.')
+        def lost_response(route):
+            response = route.fetch()
+            assert response.status == 201
+            route.fulfill(status=201, content_type='application/json', body='null')
+        page.route('**/sources/text', lost_response)
+        page.locator('#form-submit').click()
+        expect(page.locator('#form-error')).to_contain_text('Конкурент создан.')
+        settle()
+        cid = state_value('activeCompetitorId')
+        saved = detail(cid)['sources']
+        page.unroute('**/sources/text', lost_response)
+        page.locator('#form-submit').click()
+        finish()
+        assert [item['id'] for item in detail(cid)['sources']] == [saved[0]['id']]
+        assert len(source(saved[0]['id'])['analyses']) == 1
+
+        # Unknown outcome with no visible source blocks another creation request.
+        open_create('Onboarding unknown outcome', 'Данные с неопределённым результатом запроса.')
+        def unknown_response(route):
+            route.fulfill(status=201, content_type='application/json', body='null')
+        page.route('**/sources/text', unknown_response)
+        before_creates = creates()
+        before_sources = sum(method == 'POST' and '/sources/text' in url for method, url in requests)
+        page.locator('#form-submit').click()
+        expect(page.locator('#form-error')).to_contain_text('Конкурент создан.')
+        settle()
+        cid = state_value('activeCompetitorId')
+        page.unroute('**/sources/text', unknown_response)
+        page.locator('#form-submit').click()
+        expect(page.locator('#form-error')).to_contain_text('повторная отправка заблокирована')
+        settle()
+        assert creates() == before_creates + 1 and not detail(cid)['sources']
+        assert sum(method == 'POST' and '/sources/text' in url for method, url in requests) == before_sources + 1
+        page.locator('#form-cancel').click()
+
+        # Desktop/mobile dialog, loading, controlled failure and corrected retry.
+        for label, width, height in [('desktop', 1440, 900), ('mobile', 390, 844)]:
+            page.set_viewport_size({'width': width, 'height': height})
+            open_create(f'Onboarding visual {label}', text)
+            capture(label + '-dialog')
+            pending = []
+            def hold(route):
+                pending.append(route)
+            page.route('**/sources/text', hold)
+            before_creates = creates()
+            page.locator('#form-submit').click()
+            expect(page.locator('#form-status')).to_contain_text('Конкурент создан. Источник отправляется')
+            expect(page.locator('#form-submit')).to_be_disabled()
+            page.locator('#editor-form').evaluate("form => form.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}))")
+            page.wait_for_timeout(100)
+            assert len(pending) == 1, 'Duplicate source during loading'
+            page.locator('#form-submit').scroll_into_view_if_needed()
+            capture(label + '-loading')
+            expected_http.add((pending[0].request.url, 400))
+            pending[0].fulfill(status=400, content_type='application/json', body=json.dumps({
+                'error': {'code': 'INVALID_INPUT', 'message': 'Исправьте данные источника.', 'details': None}}))
+            page.unroute('**/sources/text', hold)
+            expect(page.locator('#form-error')).to_contain_text('Конкурент создан.')
+            settle()
+            cid = state_value('activeCompetitorId')
+            assert not detail(cid)['sources']
+            expect(page.locator('#field-initial_source')).to_have_value(text)
+            page.locator('#form-error').scroll_into_view_if_needed()
+            page.locator('#form-submit').scroll_into_view_if_needed()
+            capture(label + '-error')
+            page.locator('#field-initial_source').fill(text + ' Corrected.')
+            page.locator('#form-submit').click()
+            finish()
+            assert creates() == before_creates + 1 and len(detail(cid)['sources']) == 1
+            page.locator('#analysis-pane').scroll_into_view_if_needed()
+            assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+            page.screenshot(path=str(artifacts / f'{label}-result.png'))
+
+        assert not any('/aggregate-analysis' in url or '/comparisons' in url for method, url in requests if method == 'POST')
+        assert not errors and not external and not unexpected_http, (errors, external, unexpected_http)
+        for text, location in console_errors:
+            assert any(location.get('url') == url and text ==
+                       f'Failed to load resource: the server responded with a status of {status} ({"Bad Request" if status == 400 else "Bad Gateway"})'
+                       for url, status in expected_http), (text, location)
+        print('INITIAL_SOURCE: name-only/URL/text/invalid URL/SSRF literal+DNS/partial failure/retry/no duplicates PASS')
+        print('INITIAL_SOURCE + EXISTING ADD SOURCE: URL then Text/URL/Image/PDF; first source unchanged PASS')
+        print('ONBOARDING: desktop=1440x900 mobile=390x844 labels/loading/errors/results/no overflow PASS')
+        print('ONBOARDING: no aggregate/comparison; no live AI/external requests; screenshots=' + str(artifacts))
+    finally:
+        if 'analyze' in locals():
+            ai_service.analyze_source = analyze
+        context.close()
+
+
+def run_browser(origin, png, captures):
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        try:
+            run_onboarding(browser, origin, png, captures)
+        finally:
+            browser.close()
+
+
+if __name__ == '__main__':
+    smoke.run_browser = run_browser
+    smoke.main()
