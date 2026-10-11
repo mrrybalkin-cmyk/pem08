@@ -206,4 +206,10 @@ README.md            Project landing page
 
 ### Desktop packaging
 
-Учебное задание предусматривало PyQt6/PyInstaller desktop packaging. Эта реализация поставляется как **Web-first local application** и намеренно не включает `build.py`, PyQt6 desktop wrapper, PyInstaller executable или `competitionmonitor.exe`.
+Основное приложение остаётся **Web-first local application**. Stage 13.1 добавляет исходный PyQt6 + QtWebEngine prototype (`desktop.py`), показывающий тот же Web UI через FastAPI worker и динамический localhost port. PyInstaller packaging, `build.py` и `competitionmonitor.exe` пока отсутствуют.
+
+Для prototype нужен отдельный desktop venv с Web dependencies из `requirements.txt`, `PyQt6==6.11.0` и `PyQt6-WebEngine==6.11.0`; основной Web venv не меняется. Запуск из настроенного desktop venv: `python desktop.py` (или `pythonw desktop.py` без console window).
+
+До запуска создайте `%LOCALAPPDATA%\CompetitionMonitor\.env` на основе `.env.example` и заполните `AI_API_KEY`. Desktop использует собственные `data/app.db`, `uploads`, `screenshots` и `logs` внутри этого runtime root; Web DB автоматически не копируется. Второй экземпляр блокируется. Закрытие окна ожидает FastAPI lifespan cleanup.
+
+Проверки: `python -m pytest tests/test_desktop_runtime.py -q` и, в desktop venv, `python -m tests.desktop_smoke`. Smoke использует временные данные, mock AI и локальный Chromium capture, не читает production configuration. Для capture нужен установленный browser соответствующей версии Playwright; Chromium ещё не упакован. Qt screenshots/evidence сохраняются только в ignored `.pytest-temp/stage13-desktop/`. Публичный binary/release не создаётся; лицензия проверяется до публикации.

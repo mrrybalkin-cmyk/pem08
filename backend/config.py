@@ -2,6 +2,7 @@
 Конфигурация приложения
 """
 import logging
+import os
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -43,7 +44,7 @@ class Settings(BaseSettings):
     """Configuration for the local v2 Web application."""
 
     model_config = SettingsConfigDict(
-        env_file=PROJECT_ROOT / ".env", env_file_encoding="utf-8",
+        env_file=os.environ.get("PEM08_DESKTOP_CONFIG", PROJECT_ROOT / ".env"), env_file_encoding="utf-8",
         extra="ignore", populate_by_name=True,
     )
 
